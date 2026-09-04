@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"reflect"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -428,7 +429,7 @@ func (e *Encoder) encodeFieldMultipart(rv reflect.Value, key string, mw *multipa
 
 func writeFilePart(mw *multipart.Writer, key string, f File) error {
 	h := make(textproto.MIMEHeader)
-	h["Content-Disposition"] = []string{fmt.Sprintf(`form-data; name=%q; filename=%q`, key, f.Filename)}
+	h["Content-Disposition"] = []string{fmt.Sprintf(`form-data; name="%s"; filename="%s"`, escapeQuotes(key), escapeQuotes(f.Filename))}
 	if f.ContentType != "" {
 		h["Content-Type"] = []string{f.ContentType}
 	} else {
@@ -442,6 +443,13 @@ func writeFilePart(mw *multipart.Writer, key string, f File) error {
 		return &EncodingError{FieldPath: key, Err: err}
 	}
 	return nil
+}
+
+// escapeQuotes escapes a multipart header parameter value the same way the
+// Go standard library does (mime/multipart is not exposed directly via the
+// writer API we use). This is the exact quoting rule HTTP form parsers expect.
+func escapeQuotes(s string) string {
+	return strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(s)
 }
 
 func writeStringPart(mw *multipart.Writer, key, value string) error {

@@ -3,6 +3,7 @@ package anyform
 import (
 	"reflect"
 	"strings"
+	"sync"
 )
 
 // defaultTagPriority defines the default tag resolution order for marshalling.
@@ -274,9 +275,23 @@ func parseProtobufFieldName(parts []string) (string, bool) {
 	return "", false
 }
 
+// unmarshalIndexKey identifies a built unmarshal index in the shared cache.
+// The tag priority is part of the key because the index is priority-dependent.
+type unmarshalIndexKey struct {
+	t        reflect.Type
+	priority string
+}
+
+// unmarshalIndexCache caches tag→field indexes built from struct types, the
+// way encoding/json caches its type fields. Building an index is pure
+// reflection and never mutates the type, so results are safe to share across
+// all decoders and goroutines.
+var unmarshalIndexCache sync.Map // key: unmarshalIndexKey, value: map[string]reflect.StructField
+
 // buildUnmarshalIndex builds a map from every possible tag value and Go field name
 // to the corresponding struct field, for efficient lookup during unmarshalling.
 // It checks all tags in priority order and registers every non-skip name.
+// Results are cached per (type, tag priority) and reused across calls.
 func (r *tagResolver) buildUnmarshalIndex(t reflect.Type) map[string]reflect.StructField {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
@@ -285,6 +300,21 @@ func (r *tagResolver) buildUnmarshalIndex(t reflect.Type) map[string]reflect.Str
 		return nil
 	}
 
+	key := unmarshalIndexKey{t: t, priority: strings.Join(r.priority, ",")}
+	if cached, ok := unmarshalIndexCache.Load(key); ok {
+		m, _ := cached.(map[string]reflect.StructField)
+		return m
+	}
+
+	index := r.buildUnmarshalIndexUncached(t)
+	actual, _ := unmarshalIndexCache.LoadOrStore(key, index)
+	m, _ := actual.(map[string]reflect.StructField)
+	return m
+}
+
+// buildUnmarshalIndexUncached performs the actual reflection walk. Callers
+// should use buildUnmarshalIndex, which caches the result per struct type.
+func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) map[string]reflect.StructField {
 	index := make(map[string]reflect.StructField)
 
 	for i := range t.NumField() {

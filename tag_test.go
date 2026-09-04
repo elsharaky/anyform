@@ -207,6 +207,59 @@ func TestTagResolver_buildUnmarshalIndex(t *testing.T) {
 	}
 }
 
+// Repeated builds of the same type must keep working with the cache in place:
+// the same keys resolve to the same fields, across repeated calls and across
+// different tag priorities (the index registers every non-skip name, so content
+// is order-independent, but the cache must never serve stale/mixed results).
+func TestTagResolver_buildUnmarshalIndexCache(t *testing.T) {
+	tp := reflect.TypeOf(testMarshalTags{})
+
+	def := newTagResolver()
+	a := def.buildUnmarshalIndex(tp)
+	b := def.buildUnmarshalIndex(tp)
+	if a == nil || b == nil {
+		t.Fatal("buildUnmarshalIndex returned nil")
+	}
+	if len(a) == 0 {
+		t.Fatal("index is empty")
+	}
+
+	// Content must be identical across repeated (cached) builds.
+	if len(a) != len(b) {
+		t.Fatalf("cached index size changed: %d != %d", len(a), len(b))
+	}
+	// The cache must actually reuse the same map, not rebuild a fresh one.
+	if reflect.ValueOf(a).Pointer() != reflect.ValueOf(b).Pointer() {
+		t.Error("expected cached map identity across repeated builds")
+	}
+	for k, sf := range a {
+		other, ok := b[k]
+		if !ok {
+			t.Fatalf("key %q missing from second build", k)
+		}
+		if other.Name != sf.Name || other.Type != sf.Type {
+			t.Errorf("key %q resolved to different field across builds", k)
+		}
+	}
+
+	// A different priority order must still resolve identically, never a
+	// mutated/partial result from the shared cache.
+	jsonFirst := newTagResolver("json", "form", "xml", "protobuf")
+	c := jsonFirst.buildUnmarshalIndex(tp)
+	if len(c) != len(a) {
+		t.Fatalf("priority-reordered index size changed: %d != %d", len(c), len(a))
+	}
+	for k, sf := range a {
+		other, ok := c[k]
+		if !ok {
+			t.Fatalf("key %q missing from reordered-priority build", k)
+		}
+		if other.Name != sf.Name {
+			t.Errorf("key %q resolved to different index across priorities", k)
+		}
+	}
+}
+
 func TestParseTagOptions(t *testing.T) {
 	tests := []struct {
 		tag  string

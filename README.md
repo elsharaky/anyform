@@ -200,6 +200,13 @@ notes).
 | `TextMarshaler` / `TextUnmarshaler` | automatic | |
 | `File` / `[]File` | multipart | |
 | Custom types | `WithCustomConverter` | |
+| `any` / `interface{}` | encode only | see note below |
+
+> **`any` fields:** encoding a field typed as `any`/`interface{}` (holding a
+> concrete value, e.g. a string or number) works and serializes the concrete
+> value. **Decoding is not supported**: there is no way to know which concrete
+> type to parse into, so an incoming value targeting an `any` field fails with
+> `unsupported field kind interface`.
 
 ## Marshaller / unmarshaller behavior
 
