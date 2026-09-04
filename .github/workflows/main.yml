@@ -1,18 +1,18 @@
 name: Version
 
 # On every push/merge to `main`, bump the semantic version based on the
-# commit message(s) and push a `vX.Y.Z` tag (Conventional Commits).
-# The accompanying GitHub Release is created by release.yml reacting to the tag.
+# commit message(s) (Conventional Commits), tag main with vX.Y.Z, and
+# publish the GitHub Release — all handled by semantic-release per .releaserc.
 on:
   push:
     branches: [main]
 
 permissions:
-  contents: write # to create tags on main
+  contents: write # to create tags and GitHub releases
 
 jobs:
-  bump:
-    name: Semantic Version Bump
+  release:
+    name: Semantic Release
     runs-on: ubuntu-latest
     if: github.repository == 'elsharaky/anyform' && github.actor != 'github-actions[bot]'
     steps:
@@ -28,15 +28,10 @@ jobs:
       - name: Run tests
         run: go test -race ./...
 
-      # Reads .releaserc: commits since last tag -> major/minor/patch bump,
-      # then @semantic-release/git tags main with vX.Y.Z.
+      # Reads .releaserc (commit-analyzer, release-notes-generator, github):
+      # analyzes Conventional Commits since the last tag, generates structured
+      # release notes, tags main with vX.Y.Z, and publishes the GitHub Release.
       - name: Semantic Release
         uses: cycjimmy/semantic-release-action@v4
-        with:
-          branch: main
-          extra_plugins: |
-            @semantic-release/changelog@6.0.3
-            @semantic-release/git@10.0.1
-          dry_run: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

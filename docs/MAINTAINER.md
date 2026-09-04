@@ -357,8 +357,9 @@ govulncheck ./...
 ```
 
 CI (`.github/workflows/ci.yml`) runs all of these on every PR. Security
-scanning (CodeQL), release automation (`release.yml`, tagged `vX.Y.Z`
-releases, no goreleaser since this is a pure library), and dependabot are
+scanning (CodeQL), release automation (`main.yml` running semantic-release,
+which tags `vX.Y.Z` and publishes the GitHub Release from Conventional
+Commits; no goreleaser since this is a pure library), and dependabot are
 configured.
 
 ---

@@ -61,9 +61,11 @@ Example: `feat: add support for custom tag priority`
 ## Versioning & releases
 
 - `anyform` follows [Semantic Versioning](https://semver.org/).
-- Releases are created by maintainers via git tags (`vX.Y.Z`) and the
-  [release workflow](.github/workflows/release.yml). The Go module proxy picks
-  up tagged versions automatically.
+- Releases are created automatically when a PR is merged into `main`: the
+  [Version workflow](.github/workflows/main.yml) runs semantic-release, which
+  computes the next version from Conventional Commits, tags the commit
+  (`vX.Y.Z`), and publishes the GitHub Release. The Go module proxy picks up
+  tagged versions automatically.
 - Do not bump versions in a PR unless asked.
 
 ## Code of conduct
