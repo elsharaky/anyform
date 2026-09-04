@@ -143,6 +143,28 @@ func (r *tagResolver) unmarshalFieldName(t reflect.Type, key string) (reflect.St
 	return reflect.StructField{}, false
 }
 
+// unmarshalTagNames returns all non-skip tag names for a field, in priority
+// order, plus the Go field name as a fallback. If the field is skipped (first
+// tag in priority is "-"), skip is returned true and names is nil.
+func (r *tagResolver) unmarshalTagNames(sf reflect.StructField) (names []string, skip bool) {
+	for _, tag := range r.priority {
+		val, ok := sf.Tag.Lookup(tag)
+		if !ok {
+			continue
+		}
+		opts := parseTagOptions(val)
+		if opts.Skip {
+			return nil, true
+		}
+		if opts.Name != "" {
+			names = append(names, opts.Name)
+		}
+	}
+	// Always include the Go field name as a fallback (matches buildUnmarshalIndex).
+	names = append(names, sf.Name)
+	return names, false
+}
+
 // isSkipped reports whether a field should be excluded from form handling.
 // Anonymous embedded struct fields are never skipped at this level (they are
 // recursed into by callers).

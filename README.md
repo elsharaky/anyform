@@ -240,8 +240,10 @@ anyform.Unmarshal(body, ct, &got) // reconstructs all nested fields
 
 - `,required` returns `ErrMissingRequired` when the field is absent.
 - `,default:v` populates an absent scalar field with `v`.
-- `WithStrictUnmarshal(true)` reports unknown keys as errors.
-- Any tag name in the priority list is accepted as the submitted key.
+- `WithStrictUnmarshal(true)` reports unknown keys as errors — including
+  unknown multipart file parts, not just value keys.
+- Any tag name in the priority list is accepted as the submitted key, for
+  value fields **and** `File`/`[]File` fields.
 - Nil pointers are allocated; absent fields keep their zero value.
 
 ## Configuration
