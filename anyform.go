@@ -132,9 +132,6 @@ func scanForFiles(rv reflect.Value, visited map[reflect.Type]bool, depth int) bo
 		}
 		return scanForFiles(rv.Elem(), visited, depth+1)
 	case reflect.Slice, reflect.Array:
-		if rv.Type() == reflect.TypeOf(File{}) {
-			return true
-		}
 		for i := range rv.Len() {
 			if scanForFiles(rv.Index(i), visited, depth+1) {
 				return true
@@ -160,7 +157,11 @@ func scanForFiles(rv reflect.Value, visited map[reflect.Type]bool, depth int) bo
 	}
 
 	t := rv.Type()
-	if t == reflect.TypeOf(File{}) || t == reflect.TypeOf([]File{}) {
+	// A struct field of type File is caught here: the switch above only falls
+	// through for Struct kinds, and File is the one struct type that means
+	// multipart. A []File slice never reaches this line — slices are handled by
+	// the Slice case's per-element recursion above.
+	if t == reflect.TypeOf(File{}) {
 		return true
 	}
 

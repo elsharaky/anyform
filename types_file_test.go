@@ -3,6 +3,7 @@ package anyform
 import (
 	"bytes"
 	"mime/multipart"
+	"net"
 	"net/http/httptest"
 	"net/url"
 	"reflect"
@@ -90,6 +91,82 @@ func TestDurationConverter(t *testing.T) {
 	}
 	if out.D != 90*time.Second {
 		t.Errorf("D = %v", out.D)
+	}
+}
+
+func TestIPConverter(t *testing.T) {
+	enc := NewEncoder()
+
+	type s struct {
+		IP net.IP `form:"ip"`
+	}
+	vals, err := enc.Marshal(s{IP: net.ParseIP("192.168.1.10")})
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if vals.Get("ip") != "192.168.1.10" {
+		t.Errorf("ip = %q", vals.Get("ip"))
+	}
+
+	dec := NewDecoder()
+	var out s
+	if err := dec.Unmarshal(url.Values{"ip": {"10.0.0.1"}}, &out); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if !out.IP.Equal(net.ParseIP("10.0.0.1")) {
+		t.Errorf("IP = %v", out.IP)
+	}
+
+	// empty value unmarshals to nil IP (not an error)
+	var empty s
+	if err := dec.Unmarshal(url.Values{"ip": {""}}, &empty); err != nil {
+		t.Fatalf("unmarshal empty error: %v", err)
+	}
+	if empty.IP != nil {
+		t.Errorf("IP = %v, want nil", empty.IP)
+	}
+
+	// invalid IP reports a parse error
+	if err := dec.Unmarshal(url.Values{"ip": {"not-an-ip"}}, &s{}); err == nil {
+		t.Error("expected error for invalid IP")
+	}
+}
+
+func TestURLConverter(t *testing.T) {
+	enc := NewEncoder()
+
+	type s struct {
+		Link url.URL `form:"link"`
+	}
+	vals, err := enc.Marshal(s{Link: url.URL{Scheme: "https", Host: "example.com", Path: "/x"}})
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if vals.Get("link") != "https://example.com/x" {
+		t.Errorf("link = %q", vals.Get("link"))
+	}
+
+	dec := NewDecoder()
+	var out s
+	if err := dec.Unmarshal(url.Values{"link": {"https://example.com/x?q=1"}}, &out); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if out.Link.String() != "https://example.com/x?q=1" {
+		t.Errorf("Link = %v", out.Link)
+	}
+
+	// empty value is left as-is (zero url.URL)
+	var empty s
+	if err := dec.Unmarshal(url.Values{"link": {""}}, &empty); err != nil {
+		t.Fatalf("unmarshal empty error: %v", err)
+	}
+	if empty.Link.String() != "" {
+		t.Errorf("Link = %v, want zero", empty.Link.String())
+	}
+
+	// invalid URL reports a parse error
+	if err := dec.Unmarshal(url.Values{"link": {"://%"}}, &s{}); err == nil {
+		t.Error("expected error for invalid URL")
 	}
 }
 

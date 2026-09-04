@@ -288,6 +288,13 @@ func (d *Decoder) assignLeaf(field reflect.Value, vals []string) error {
 		field = field.Elem()
 	}
 
+	// Registered converters take priority over kind-based handling, matching
+	// the encoder. This matters for net.IP (slice kind) and url.URL (struct
+	// kind), which otherwise fall into the slice/struct branches below.
+	if conv, ok := d.cfg.converters[field.Type()]; ok {
+		return conv.Unmarshal(vals[0], field)
+	}
+
 	switch field.Kind() {
 	case reflect.Struct:
 		if field.Type() == reflect.TypeOf(File{}) {
