@@ -1,5 +1,7 @@
 name: Release
 
+# Triggered when the Version workflow tags `main` with vX.Y.Z.
+# Publishes the GitHub Release for that tag.
 on:
   push:
     tags: ['v*']
@@ -9,16 +11,18 @@ permissions:
 
 jobs:
   release:
-    name: Create GitHub Release
+    name: Publish GitHub Release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.27'
           cache: true
+      - name: Build
+        run: go build ./...
       - name: Run tests
         run: go test -race ./...
       - name: Create release / publish tags
