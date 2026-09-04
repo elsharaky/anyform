@@ -74,7 +74,7 @@ jobs:
         with:
           args: '-fmt sarif -out /tmp/gosec.sarif ./...'
       - name: Upload SARIF to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
           sarif_file: /tmp/gosec.sarif
