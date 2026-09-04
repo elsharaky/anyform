@@ -26,9 +26,10 @@ those libraries leave behind.
   fallback. Fully configurable.
 - **Native file support** — the [`File`](#the-file-type) type carries content,
   content type, and filename, decoupled from `net/http`.
-- **Every Go type** — primitives, pointers, slices, arrays, maps, nested
-  structs, embedded structs, `time.Time`, `time.Duration`, custom types, and
-  anything implementing `encoding.TextMarshaler`/`TextUnmarshaler`.
+- **Every Go type as a field** — primitives, pointers, slices, arrays, maps,
+  nested structs, embedded structs, `time.Time`, `time.Duration`, custom types,
+  and anything implementing `encoding.TextMarshaler`/`TextUnmarshaler` (the
+  root value must be a struct — see *Root value* below).
 - **Zero external dependencies.**
 - **Thread-safe** — both the unified functions and `Encoder`/`Decoder`.
 
@@ -168,7 +169,21 @@ CLIs, and more. Use `FilesFromRequest` to pull raw files from an
 `http.Request` without a decoder. For reliable multipart detection, file parts
 should carry a filename.
 
+A file part that **is** present but carries **zero bytes** is still bound: the
+resulting `File` has an empty `Content` but preserves its `Filename`. That is
+intentional — an empty upload is treated as a provided (empty) file, not as an
+absent one. A part with an *empty* filename, by contrast, is classified by the
+multipart parser as a value field (see the [hardening](#server-hardening)
+notes).
+
 ## Supported types
+
+> **Root value:** the value passed to `Marshal` / `Unmarshal` (and to
+> `Encoder`/`Decoder`) must be a **struct** (or a pointer to a struct) — the
+> same contract `encoding/json` has for the destination, but `anyform` keeps it
+> for **both** directions. Slices, arrays, maps, and primitives are supported
+> only as *field values*, because every form key names a field: a bare root
+> slice would have no namespace to attach its keys to.
 
 | Category | Types | Notes |
 |----------|-------|-------|
@@ -246,6 +261,35 @@ anyform.Unmarshal(body, ct, &got) // reconstructs all nested fields
   value fields **and** `File`/`[]File` fields.
 - Nil pointers are allocated; absent fields keep their zero value.
 
+### Server hardening
+
+`anyform` reads bodies and file content into memory, and by default imposes no
+size limits. For untrusted uploads the strongest protection stops oversized
+requests **before** any parsing — wrap the request body in
+[`http.MaxBytesReader`](https://pkg.go.dev/net/http#MaxBytesReader), then use
+`WithMaxBodySize` / `WithMaxFileSize` as a second line of defense:
+
+```go
+// 10 MiB cap on the whole request, enforced while reading.
+r.Body = http.MaxBytesReader(w, r.Body, 10<<20)
+form, err := r.MultipartForm()
+if err != nil {
+    // e.g. 413 Payload Too Large
+}
+var up Upload
+err = anyform.NewDecoder(
+    anyform.WithMaxBodySize(10<<20),
+    anyform.WithMaxFileSize(5<<20), // each file ≤ 5 MiB
+).UnmarshalMultipartForm(form, &up)
+if errors.Is(err, anyform.ErrFileTooLarge) {
+    // 413 Payload Too Large
+}
+```
+
+Because file parts are checked against their declared size **before** their
+content is read into memory, an oversized file is rejected without first
+buffering it.
+
 ## Configuration
 
 | Option | Description |
@@ -258,7 +302,7 @@ anyform.Unmarshal(body, ct, &got) // reconstructs all nested fields
 | `WithTextMarshalerSupport(bool)` | Enable/disable `TextMarshaler` (default true) |
 | `WithStrictUnmarshal(bool)` | Error on unknown keys (default false) |
 | `WithMaxBodySize(bytes)` | Max body size in `Unmarshal` → `ErrBodyTooLarge` (0 = unlimited) |
-| `WithMaxFileSize(bytes)` | Max per-file size in multipart decode → `ErrFileTooLarge` (0 = unlimited) |
+| `WithMaxFileSize(bytes)` | Max per-file size in multipart decode → `ErrFileTooLarge` (0 = unlimited). Rejected using the part's declared size **before** the content is read into memory |
 
 ### Custom converters
 
