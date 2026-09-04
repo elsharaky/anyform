@@ -103,10 +103,13 @@
 //   - ,omitempty and the global WithZeroEmpty omit empty values on marshal.
 //   - ,required produces ErrMissingRequired when the field is absent.
 //   - ,default:v populates an absent field with v (scalar kinds only).
-//   - ,strict (WithStrictUnmarshal) reports unknown keys as errors.
+//   - ,strict (WithStrictUnmarshal) reports unknown keys as errors. This covers
+//     both value fields and multipart file parts.
 //   - WithMaxBodySize limits the whole body passed to Unmarshal
 //     (ErrBodyTooLarge); WithMaxFileSize limits each file part
 //     (ErrFileTooLarge). Both are 0 (= unlimited) by default.
 //   - Unmarshalling matches a submitted key against any tag name in the
-//     priority list, not just the primary form name.
+//     priority list, not just the primary form name. This applies to value
+//     fields AND File/[]File fields: a file part named by any of the field's
+//     tags is accepted.
 package anyform

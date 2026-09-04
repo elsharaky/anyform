@@ -366,6 +366,7 @@ func (d *Decoder) unmarshalFiles(mf *multipart.Form, dst reflect.Value) error {
 	}
 
 	rt := dst.Type()
+	consumed := make(map[string]bool, len(mf.File))
 	for i := range rt.NumField() {
 		sf := rt.Field(i)
 
@@ -383,13 +384,10 @@ func (d *Decoder) unmarshalFiles(mf *multipart.Form, dst reflect.Value) error {
 			continue
 		}
 
-		name, skip := d.resolver.marshalFieldName(sf)
+		// Resolve all tag names that can address this field (form, json, xml,
+		// protobuf, plus the Go field name) — matching how value fields work.
+		names, skip := d.resolver.unmarshalTagNames(sf)
 		if skip {
-			continue
-		}
-
-		files, ok := mf.File[name]
-		if !ok {
 			continue
 		}
 
@@ -398,31 +396,45 @@ func (d *Decoder) unmarshalFiles(mf *multipart.Form, dst reflect.Value) error {
 			continue
 		}
 
+		var files []*multipart.FileHeader
+		var matchedName string
+		for _, name := range names {
+			if got, ok := mf.File[name]; ok {
+				files = got
+				matchedName = name
+				break
+			}
+		}
+
 		switch {
 		case fieldVal.Type() == reflect.TypeOf(File{}):
+			if len(files) > 0 {
+				f, err := d.readFile(files[0], matchedName)
+				if err != nil {
+					return err
+				}
+				fieldVal.Set(reflect.ValueOf(f))
+				consumed[matchedName] = true
+			}
+		case fieldVal.Type() == reflect.TypeOf([]File{}):
 			if len(files) == 0 {
 				continue
 			}
-			f, err := d.readFile(files[0], name)
-			if err != nil {
-				return err
-			}
-			fieldVal.Set(reflect.ValueOf(f))
-		case fieldVal.Type() == reflect.TypeOf([]File{}):
-			var out []File
+			out := make([]File, 0, len(files))
 			for _, fh := range files {
-				f, err := d.readFile(fh, name)
+				f, err := d.readFile(fh, matchedName)
 				if err != nil {
 					return err
 				}
 				out = append(out, f)
 			}
 			fieldVal.Set(reflect.ValueOf(out))
+			consumed[matchedName] = true
 		case fieldVal.Kind() == reflect.Pointer && fieldVal.Type().Elem() == reflect.TypeOf(File{}):
 			if len(files) == 0 {
 				continue
 			}
-			f, err := d.readFile(files[0], name)
+			f, err := d.readFile(files[0], matchedName)
 			if err != nil {
 				return err
 			}
@@ -430,6 +442,17 @@ func (d *Decoder) unmarshalFiles(mf *multipart.Form, dst reflect.Value) error {
 				fieldVal.Set(reflect.New(reflect.TypeOf(File{})))
 			}
 			fieldVal.Elem().Set(reflect.ValueOf(f))
+			consumed[matchedName] = true
+		}
+	}
+
+	// Under strict mode, any multipart file part that did not map to a File
+	// field is an error instead of being silently dropped.
+	if d.cfg.strict {
+		for part := range mf.File {
+			if !consumed[part] {
+				return &DecodingError{Key: part, Err: fmt.Errorf("unknown field %q", part)}
+			}
 		}
 	}
 

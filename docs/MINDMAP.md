@@ -114,6 +114,8 @@ decodePath(field, rest[], values, depth)
  └─ mapkey -> map entry
 
 unmarshalFiles(mf, elem)   • populate File / []File from multipart parts
+ ├─ unmarshalTagNames(sf)  • alias keys (form/json/xml/... + Go name)
+ ├─ strict -> unknown file parts = DecodingError (was silently dropped)
  └─ readFile(fh)   [NEW]: FileFromHeader then maxFileSize check
      over-limit -> DecodingError{ErrFileTooLarge} (whole input rejected)
 

@@ -246,9 +246,14 @@ UnmarshalMultipartForm(mf, v)
   -> applyDefaultsAndRequired
 ```
 
-`unmarshalFiles` walks the struct, matches file part names, and populates
-`File` / `[]File` fields from `readFile`, a thin wrapper around
-`FileFromHeader` that enforces `config.maxFileSize`:
+`unmarshalFiles` walks the struct and matches file part names using
+`unmarshalTagNames` — the *same* alias logic value fields use (`form`, `json`,
+`xml`, `protobuf`, plus the Go field name). A file part named by any of a
+field's tags is accepted. Under `WithStrictUnmarshal`, file parts that match
+no `File` field are rejected (previously they were silently dropped — a bug
+fixed alongside the value/file alias parity issue). Fields are populated from
+`readFile`, a thin wrapper around `FileFromHeader` that enforces
+`config.maxFileSize`:
 if `len(f.Content) > maxFileSize`, it returns `DecodingError{ErrFileTooLarge}`
 and the whole input is rejected (there is no partial-file behavior).
 
