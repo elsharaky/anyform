@@ -291,7 +291,7 @@ func (d *Decoder) assignLeaf(field reflect.Value, vals []string) error {
 	switch field.Kind() {
 	case reflect.Struct:
 		if field.Type() == reflect.TypeOf(File{}) {
-			return errors.New("cannot decode scalar into File; use UnmarshalMultipartForm")
+			return errors.New("cannot decode value part into File field: multipart file parts must include a filename")
 		}
 		if field.Type() == reflect.TypeOf(time.Time{}) {
 			tv := timeConverter{layout: d.cfg.timeLayout}
@@ -303,6 +303,12 @@ func (d *Decoder) assignLeaf(field reflect.Value, vals []string) error {
 		// Nested struct as a single value — treat as flattening: ignore extra.
 		return nil
 	case reflect.Slice, reflect.Array:
+		// A value part applied to a File element means the client sent the
+		// part without a filename, so the multipart parser routed it to the
+		// value path. Surface that instead of a raw "unsupported field kind".
+		if field.Type().Elem() == reflect.TypeOf(File{}) {
+			return errors.New("cannot decode value part into []File field: multipart file parts must include a filename")
+		}
 		// Repeated key: append each value as new element.
 		if field.Kind() == reflect.Slice {
 			for _, v := range vals {
