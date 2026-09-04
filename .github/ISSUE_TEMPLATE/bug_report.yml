@@ -1,0 +1,31 @@
+---
+name: Bug report
+about: Report a bug in anyform
+title: '[BUG] '
+labels: bug
+assignees: ''
+---
+
+**Describe the bug**
+A clear and concise description of what the bug is.
+
+**To Reproduce**
+Minimal reproduction (ideally a self-contained code snippet or test):
+
+```go
+// your code here
+```
+
+**Expected behavior**
+A clear and concise description of what you expected to happen.
+
+**Actual behavior**
+What actually happened (include error messages or output).
+
+**Environment**
+- Go version: (e.g. `go version`)
+- anyform version: (e.g. `v0.1.0` or commit SHA)
+- OS: (e.g. Linux/macOS/Windows)
+
+**Additional context**
+Add any other context about the problem here.

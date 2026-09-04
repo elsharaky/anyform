@@ -1,0 +1,11 @@
+# Binaries
+*.exe
+*.test
+*.out
+
+# Test coverage
+coverage.out
+coverage.html
+
+# OS
+.DS_Store

@@ -1,0 +1,3 @@
+# Code owners: only the maintainer and explicitly added collaborators can
+# merge/approve. No one else is authorized to push directly.
+* @elsharaky

@@ -1,0 +1,45 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+  build-tags: []
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - copyloopvar
+    - errorlint
+    - exhaustive
+    - gocritic
+    - intrange
+    - misspell
+    - musttag
+    - nakedret
+    - nilerr
+    - perfsprint
+    - prealloc
+    - revive
+    - unconvert
+    - unparam
+    - usestdlibvars
+    - whitespace
+  settings:
+    errcheck:
+      check-type-assertions: true
+    exhaustive:
+      default-signifies-exhaustive: true
+    govet:
+      enable:
+        - shadow
+    revive:
+      rules:
+        - name: exported
+          severity: error
+  exclusions:
+    rules:
+      - linters: [errorlint]
+        path: _test\.go
+    paths:
+      - _test\.go
