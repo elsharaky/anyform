@@ -8,27 +8,35 @@ import (
 ) // defaultMaxDepth is the default maximum nested struct depth.
 const defaultMaxDepth = 32
 
+// defaultMaxSliceIndex is the default maximum index allowed when growing a
+// slice from a client-supplied "[i]" key. It bounds the allocation caused by
+// keys like "items[5000000]" that would otherwise exhaust memory while
+// bypassing body-size limits (a small body, a huge index).
+const defaultMaxSliceIndex = 100000
+
 // Option configures an Encoder or Decoder.
 type Option func(*config)
 
 type config struct {
-	tagPriority []string
-	maxDepth    int
-	maxBodySize int64
-	maxFileSize int64
-	zeroEmpty   bool
-	timeLayout  string
-	converters  map[reflect.Type]Converter
-	textAware   bool
-	strict      bool
+	tagPriority   []string
+	maxDepth      int
+	maxBodySize   int64
+	maxFileSize   int64
+	maxSliceIndex int
+	zeroEmpty     bool
+	timeLayout    string
+	converters    map[reflect.Type]Converter
+	textAware     bool
+	strict        bool
 }
 
 // defaultConfig returns the default configuration.
 func defaultConfig() *config {
 	return &config{
-		tagPriority: defaultTagPriority,
-		maxDepth:    defaultMaxDepth,
-		timeLayout:  time.RFC3339,
+		tagPriority:   defaultTagPriority,
+		maxDepth:      defaultMaxDepth,
+		maxSliceIndex: defaultMaxSliceIndex,
+		timeLayout:    time.RFC3339,
 		converters: map[reflect.Type]Converter{
 			reflect.TypeOf(time.Duration(0)): durationConverter{},
 			reflect.TypeOf(net.IP{}):         ipConverter{},
@@ -55,6 +63,17 @@ func WithMaxDepth(n int) Option {
 		if n > 0 {
 			c.maxDepth = n
 		}
+	}
+}
+
+// WithMaxSliceIndex sets the maximum index a slice may be grown to from a
+// client-supplied "[i]" key during unmarshalling. This bounds the memory a
+// tiny body can force you to allocate (e.g. "items[5000000]=x"). An index at
+// or above this bound fails with a DecodingError. Default: 100000.
+// A value <= 0 disables the limit.
+func WithMaxSliceIndex(n int) Option {
+	return func(c *config) {
+		c.maxSliceIndex = n
 	}
 }
 

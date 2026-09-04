@@ -1,6 +1,8 @@
 package anyform
 
 import (
+	"bytes"
+	"mime/multipart"
 	"net/url"
 	"reflect"
 	"testing"
@@ -436,5 +438,166 @@ func TestDecoder_Unmarshal_MapOfStruct(t *testing.T) {
 	}
 	if out.M["key"].Name != "n" {
 		t.Errorf("M = %+v", out.M)
+	}
+}
+
+// Regression: promoted fields from an embedded struct must be addressed by an
+// index that is valid on the OUTER struct (embedded field's index prepended),
+// not the embedded type's own index. Previously the value was silently dropped
+// or landed in an unrelated sibling field.
+type decodeEmbedCreds struct {
+	Token string `form:"token,required"`
+}
+
+type decodeEmbedReq struct {
+	decodeEmbedCreds
+	Note string `form:"note"`
+}
+
+func TestDecoder_Unmarshal_EmbeddedPromotedField(t *testing.T) {
+	dec := NewDecoder()
+	var r decodeEmbedReq
+	if err := dec.Unmarshal(url.Values{"token": {"secret-abc"}}, &r); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if r.Token != "secret-abc" {
+		t.Errorf("Token = %q, want %q (Note=%q)", r.Token, "secret-abc", r.Note)
+	}
+	if r.Note != "" {
+		t.Errorf("Note = %q, want empty; value leaked to a sibling field", r.Note)
+	}
+}
+
+func TestDecoder_Unmarshal_EmbeddedPromotedFieldAndSibling(t *testing.T) {
+	dec := NewDecoder()
+	var r decodeEmbedReq
+	if err := dec.Unmarshal(url.Values{"token": {"t"}, "note": {"n"}}, &r); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if r.Token != "t" || r.Note != "n" {
+		t.Errorf("got Token=%q Note=%q, want %q %q", r.Token, r.Note, "t", "n")
+	}
+}
+
+// Required must fire for an embedded field's promoted key that was never set.
+func TestDecoder_Unmarshal_EmbeddedPromotedFieldRequired(t *testing.T) {
+	dec := NewDecoder()
+	var r decodeEmbedReq
+	if err := dec.Unmarshal(url.Values{"note": {"x"}}, &r); err == nil {
+		t.Error("expected missing-required error for embedded token")
+	}
+}
+
+func TestDecoder_Unmarshal_EmbeddedPromotedFieldMultipart(t *testing.T) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if fw, err := mw.CreateFormField("token"); err != nil {
+		t.Fatalf("create field: %v", err)
+	} else if _, err := fw.Write([]byte("mp-secret")); err != nil {
+		t.Fatalf("write field: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	var r decodeEmbedReq
+	if err := Unmarshal(buf.Bytes(), mw.FormDataContentType(), &r); err != nil {
+		t.Fatalf("unmarshal multipart error: %v", err)
+	}
+	if r.Token != "mp-secret" {
+		t.Errorf("Token = %q, want %q", r.Token, "mp-secret")
+	}
+}
+
+// Regression: a client-supplied huge index must not force a huge allocation.
+func TestDecoder_Unmarshal_SliceIndexCapped(t *testing.T) {
+	type s struct {
+		Items []string `form:"items"`
+	}
+
+	dec := NewDecoder()
+	var out s
+	if err := dec.Unmarshal(url.Values{"items[100001]": {"x"}}, &out); err == nil {
+		t.Fatal("expected error for index beyond max slice index")
+	}
+	if out.Items != nil {
+		t.Errorf("Items should not have grown, got len=%d", len(out.Items))
+	}
+
+	// Within the cap still works.
+	var ok s
+	if err := dec.Unmarshal(url.Values{"items[5]": {"x"}}, &ok); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(ok.Items) != 6 || ok.Items[5] != "x" {
+		t.Errorf("Items = %v", ok.Items)
+	}
+
+	// Negative indices are rejected, not a panic.
+	var neg s
+	if err := dec.Unmarshal(url.Values{"items[-1]": {"x"}}, &neg); err == nil {
+		t.Error("expected error for negative index")
+	}
+}
+
+func TestDecoder_Unmarshal_SliceIndexCustomCap(t *testing.T) {
+	type s struct {
+		Items []string `form:"items"`
+	}
+	dec := NewDecoder(WithMaxSliceIndex(10))
+	var out s
+	if err := dec.Unmarshal(url.Values{"items[10]": {"x"}}, &out); err == nil {
+		t.Error("expected error at or above custom cap")
+	}
+	var ok s
+	if err := dec.Unmarshal(url.Values{"items[9]": {"x"}}, &ok); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if len(ok.Items) != 10 {
+		t.Errorf("Items len = %d, want 10", len(ok.Items))
+	}
+}
+
+func TestDecoder_Unmarshal_SliceIndexCapDisabled(t *testing.T) {
+	type s struct {
+		Items []string `form:"items"`
+	}
+	dec := NewDecoder(WithMaxSliceIndex(0))
+	var out s
+	if err := dec.Unmarshal(url.Values{"items[200000]": {"x"}}, &out); err != nil {
+		t.Fatalf("unmarshal error with cap disabled: %v", err)
+	}
+	if len(out.Items) != 200001 {
+		t.Errorf("Items len = %d, want 200001", len(out.Items))
+	}
+}
+
+// Regression: an out-of-range index on a fixed-size array must return an
+// error, not panic.
+type decodeFixedArr struct {
+	Items [3]string `form:"items"`
+}
+
+func TestDecoder_Unmarshal_ArrayOutOfRange(t *testing.T) {
+	defer func() {
+		if rcv := recover(); rcv != nil {
+			t.Fatalf("panicked on out-of-range array index: %v", rcv)
+		}
+	}()
+	dec := NewDecoder()
+	var a decodeFixedArr
+	if err := dec.Unmarshal(url.Values{"items[10]": {"x"}}, &a); err == nil {
+		t.Fatal("expected error for out-of-range array index")
+	}
+}
+
+func TestDecoder_Unmarshal_ArrayWithinRange(t *testing.T) {
+	dec := NewDecoder()
+	var a decodeFixedArr
+	if err := dec.Unmarshal(url.Values{"items[1]": {"x"}}, &a); err != nil {
+		t.Fatalf("unmarshal error: %v", err)
+	}
+	if a.Items[1] != "x" {
+		t.Errorf("Items[1] = %q", a.Items[1])
 	}
 }

@@ -73,6 +73,36 @@ func TestCircularReferenceScanForFilesDoesNotHang(t *testing.T) {
 	_ = ct
 }
 
+// Regression: scanning for File fields must treat the visited set as a call
+// stack, so the same struct type appearing twice via interface{} fields is
+// scanned both times. Previously the second (file-bearing) instance was
+// skipped and Marshal picked url-encoded, then failed.
+type scanWrapper struct {
+	Data any `form:"data"`
+}
+
+type scanPayload struct {
+	First  scanWrapper
+	Second scanWrapper
+}
+
+func TestScanForFiles_RechecksSiblingInterfaceFields(t *testing.T) {
+	p := scanPayload{
+		First:  scanWrapper{Data: "just a string"},
+		Second: scanWrapper{Data: File{Content: []byte("x"), Filename: "f.bin"}},
+	}
+	body, ct, err := Marshal(p)
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if len(body) == 0 {
+		t.Fatal("expected a multipart body")
+	}
+	if ct == urlEncodedContentType {
+		t.Error("expected multipart content type, got url-encoded")
+	}
+}
+
 func TestEncoderDecoderThreadSafety(t *testing.T) {
 	enc := NewEncoder()
 	dec := NewDecoder()

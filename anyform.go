@@ -170,12 +170,23 @@ func scanForFiles(rv reflect.Value, visited map[reflect.Type]bool, depth int) bo
 	}
 
 	// Guard against recursive types (e.g. a struct containing itself via a
-	// pointer) by visiting each struct type only once per top-level scan.
+	// pointer) using a call-stack visited set: a type is skipped only while it
+	// is an ancestor of the current path, not merely because it was scanned
+	// elsewhere. This keeps sibling branches independent — the same struct type
+	// appearing twice with different interface-typed content must be checked
+	// both times (the dynamic value can differ).
 	if visited[t] {
 		return false
 	}
 	visited[t] = true
+	found := scanForFilesStruct(rv, visited, t, depth)
+	delete(visited, t)
+	return found
+}
 
+// scanForFilesStruct scans the exported fields of a struct value. It is split
+// out so visit tracking can be released on every return path.
+func scanForFilesStruct(rv reflect.Value, visited map[reflect.Type]bool, t reflect.Type, depth int) bool {
 	for i := range t.NumField() {
 		if !t.Field(i).IsExported() {
 			continue

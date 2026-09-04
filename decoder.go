@@ -234,8 +234,29 @@ func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string
 		if err != nil {
 			return &DecodingError{FieldPath: head.name, Err: fmt.Errorf("invalid index %q", head.name)}
 		}
-		for field.Len() <= idx {
-			field.Set(reflect.Append(field, reflect.New(field.Type().Elem()).Elem()))
+		if idx < 0 {
+			return &DecodingError{FieldPath: head.name, Err: fmt.Errorf("negative index %d", idx)}
+		}
+
+		if field.Kind() == reflect.Array {
+			// Fixed-size arrays cannot grow: reject out-of-range indices
+			// instead of attempting to append (which would panic).
+			if idx >= field.Len() {
+				return &DecodingError{FieldPath: head.name,
+					Err: fmt.Errorf("index %d out of range for array of length %d", idx, field.Len())}
+			}
+		} else {
+			// Slice: cap how far a client-supplied index can grow a slice.
+			// Without a bound, a tiny body like "items[5000000]=x" forces a
+			// huge allocation (memory-exhaustion DoS) that bypasses
+			// WithMaxBodySize.
+			if d.cfg.maxSliceIndex > 0 && idx >= d.cfg.maxSliceIndex {
+				return &DecodingError{FieldPath: head.name,
+					Err: fmt.Errorf("index %d exceeds maximum slice index %d", idx, d.cfg.maxSliceIndex)}
+			}
+			for field.Len() <= idx {
+				field.Set(reflect.Append(field, reflect.New(field.Type().Elem()).Elem()))
+			}
 		}
 		elem := field.Index(idx)
 		return d.decodePath(elem, tail, vals, depth+1)
