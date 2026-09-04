@@ -4,7 +4,8 @@
 // Unlike existing form packages, anyform supports:
 //   - A configurable tag priority system (form > json > xml > protobuf)
 //   - Native file upload handling via the [File] type
-//   - All Go types including maps, nested structs, slices, and custom types
+//   - All Go types as field values, including maps, nested structs, slices,
+//     and custom types
 //   - Both a simple top-level API and a configurable Encoder/Decoder API
 //   - Zero external dependencies
 //
@@ -66,11 +67,17 @@
 //
 // The [File] type holds the raw content, detected content type, and original
 // filename, decoupled from net/http so it works in any context. Note that file
-// parts should carry a filename for reliable multipart detection.
+// parts should carry a filename for reliable multipart detection. A file part
+// that is present but carries zero bytes is still bound: the resulting [File]
+// has empty Content but preserves its Filename. A part with an empty filename
+// is classified as a value field by the multipart parser.
 //
 // # Supported types
 //
-// [Marshal] and [Unmarshal] handle every common Go type:
+// [Marshal] and [Unmarshal] handle every common Go type. The value passed in
+// must always be a struct (or pointer to a struct): slices, arrays, maps, and
+// primitives are supported only as field values, since every form key names a
+// field — a bare root slice would have no namespace to attach its keys to.
 //
 //   - Scalars: string, bool, all int/uint/float/complex widths (via strconv)
 //   - Named types: type MyInt int, type Status string, etc. (via reflection)
@@ -107,7 +114,9 @@
 //     both value fields and multipart file parts.
 //   - WithMaxBodySize limits the whole body passed to Unmarshal
 //     (ErrBodyTooLarge); WithMaxFileSize limits each file part
-//     (ErrFileTooLarge). Both are 0 (= unlimited) by default.
+//     (ErrFileTooLarge). Both are 0 (= unlimited) by default. A file part
+//     exceeding the file limit is rejected using its declared size before the
+//     content is read into memory.
 //   - Unmarshalling matches a submitted key against any tag name in the
 //     priority list, not just the primary form name. This applies to value
 //     fields AND File/[]File fields: a file part named by any of the field's

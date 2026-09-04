@@ -118,6 +118,26 @@ func TestWithMaxFileSize_DecoderPath(t *testing.T) {
 	}
 }
 
+// The size limit must be enforced before content is read into memory. A
+// hand-built FileHeader with no content body still rejects on its declared Size.
+func TestWithMaxFileSize_RejectsBeforeReadingContent(t *testing.T) {
+	dec := NewDecoder(WithMaxFileSize(1024))
+	mf := &multipart.Form{
+		File: map[string][]*multipart.FileHeader{
+			"Doc": {{Filename: "big.bin", Size: 10 << 20}},
+		},
+	}
+
+	var v fileLimitStruct
+	err := dec.UnmarshalMultipartForm(mf, &v)
+	if !errors.Is(err, ErrFileTooLarge) {
+		t.Fatalf("expected ErrFileTooLarge, got %v", err)
+	}
+	if v.Doc.Content != nil {
+		t.Fatal("content must not be read for an oversized part")
+	}
+}
+
 type multiFileLimitStruct struct {
 	Docs []File
 }

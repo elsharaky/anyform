@@ -347,12 +347,18 @@ func (d *Decoder) assignScalarTo(field reflect.Value, value string) error {
 }
 
 // readFile reads a single multipart file header into a File, honoring the
-// configured per-file size limit.
+// configured per-file size limit. The size is checked against the part's
+// declared size before its content is read into memory.
 func (d *Decoder) readFile(fh *multipart.FileHeader, name string) (File, error) {
+	if d.cfg.maxFileSize > 0 && fh.Size > d.cfg.maxFileSize {
+		return File{}, &DecodingError{FieldPath: name, Err: ErrFileTooLarge}
+	}
 	f, err := FileFromHeader(fh)
 	if err != nil {
 		return File{}, &DecodingError{FieldPath: name, Err: err}
 	}
+	// Safety net: a manually constructed FileHeader may carry Size == 0 even
+	// though its read content exceeds the limit.
 	if d.cfg.maxFileSize > 0 && int64(len(f.Content)) > d.cfg.maxFileSize {
 		return File{}, &DecodingError{FieldPath: name, Err: ErrFileTooLarge}
 	}

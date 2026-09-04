@@ -116,8 +116,9 @@ decodePath(field, rest[], values, depth)
 unmarshalFiles(mf, elem)   • populate File / []File from multipart parts
  ├─ unmarshalTagNames(sf)  • alias keys (form/json/xml/... + Go name)
  ├─ strict -> unknown file parts = DecodingError (was silently dropped)
- └─ readFile(fh)   [NEW]: FileFromHeader then maxFileSize check
+ └─ readFile(fh)   [NEW]: maxFileSize checked on fh.Size BEFORE read
      over-limit -> DecodingError{ErrFileTooLarge} (whole input rejected)
+     (len(f.Content) check kept as fallback for hand-built FileHeaders)
 
 applyDefaultsAndRequired(elem, submittedKeys, depth)   [after decode]
  ├─ required & missing      -> ErrMissingRequired

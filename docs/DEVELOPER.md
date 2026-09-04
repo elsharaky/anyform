@@ -275,7 +275,8 @@ fmt.Println(up.Avatar.Filename, string(up.Avatar.Content))
 > **Security note:** the library reads each file fully into memory and, by
 > default, imposes **no size limit**. For untrusted uploads, cap both the
 > request (`http.MaxBytesReader`) and per-file size
-> (`WithMaxFileSize` → `ErrFileTooLarge`):
+> (`WithMaxFileSize` → `ErrFileTooLarge`). An oversized file part is rejected
+> using its declared size **before** the content is read into memory:
 
 ```go
 var up Upload

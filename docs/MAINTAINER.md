@@ -254,12 +254,16 @@ no `File` field are rejected (previously they were silently dropped — a bug
 fixed alongside the value/file alias parity issue). Fields are populated from
 `readFile`, a thin wrapper around `FileFromHeader` that enforces
 `config.maxFileSize`:
-if `len(f.Content) > maxFileSize`, it returns `DecodingError{ErrFileTooLarge}`
-and the whole input is rejected (there is no partial-file behavior).
+if `fh.Size > maxFileSize`, it returns `DecodingError{ErrFileTooLarge}`
+**before** the content is read into memory, and the whole input is rejected
+(there is no partial-file behavior). `FileFromHeader` reads the content with
+`io.ReadAll`, and the check against `len(f.Content)` serves as a safety net for
+hand-built `FileHeader`s whose `Size` field is zero.
 
-Size limits are **post-parse**: files are read fully first, then size-checked.
-This removes the unbounded-RAM problem but doesn't stream. A future
-streaming path could reject oversized parts before buffering.
+Size limits are checked **pre-read**: an oversized part is rejected on its
+declared size before any buffering. This removes the unbounded-RAM problem
+without adding a streaming read path. The unified `Unmarshal` additionally
+checks `WithMaxBodySize` against `len(body)` up front.
 
 ### defaults & required (`applyDefaultsAndRequired`)
 
