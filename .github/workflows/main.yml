@@ -31,7 +31,16 @@ jobs:
       # Reads .releaserc (commit-analyzer, release-notes-generator, github):
       # analyzes Conventional Commits since the last tag, generates structured
       # release notes, tags main with vX.Y.Z, and publishes the GitHub Release.
+      #
+      # .releaserc uses the `conventionalcommits` preset, which lives in
+      # `conventional-changelog-conventionalcommits`. semantic-release v24 has
+      # the angular preset built in, but the conventionalcommits preset is an
+      # external package that must be pre-installed (pinned to the v8 line that
+      # is compatible with semantic-release >= 24).
       - name: Semantic Release
         uses: cycjimmy/semantic-release-action@v4
+        with:
+          extra_plugins: |
+            conventional-changelog-conventionalcommits@8.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
