@@ -326,6 +326,15 @@ func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) map[string]ref
 		if sf.Anonymous && sf.Type.Kind() == reflect.Struct {
 			inner := r.buildUnmarshalIndex(sf.Type)
 			for k, v := range inner {
+				// The promoted field's Index is relative to the EMBEDDED type;
+				// prepend this anonymous field's own index so that a later
+				// FieldByIndex(v.Index) resolves on the parent struct. Copy
+				// into a fresh slice: inner (and its entries) live in the shared
+				// cache, and the cache entry must never be mutated.
+				idx := make([]int, 0, len(v.Index)+len(sf.Index))
+				idx = append(idx, sf.Index...)
+				idx = append(idx, v.Index...)
+				v.Index = idx
 				index[k] = v
 			}
 			continue

@@ -297,12 +297,18 @@ Because file parts are checked against their declared size **before** their
 content is read into memory, an oversized file is rejected without first
 buffering it.
 
+A second, body-size-independent vector is a client-supplied slice index:
+a tiny key like `items[1000000]=x` would otherwise grow a `[]string` to a
+million elements. `WithMaxSliceIndex` bounds this per-field (default 100000);
+indices at or above the bound fail with a `DecodingError`.
+
 ## Configuration
 
 | Option | Description |
 |--------|-------------|
 | `WithTagPriority(...tags)` | Custom tag order (default `form > json > xml > protobuf`) |
 | `WithMaxDepth(n)` | Max nested struct depth (default 32) |
+| `WithMaxSliceIndex(n)` | Max index a slice may grow to from a `[i]` key (default 100000, 0 = unlimited) |
 | `WithTimeLayout(layout)` | Layout for `time.Time` (default `RFC3339`) |
 | `WithZeroEmpty(bool)` | Omit zero-valued fields during marshal, like a global `omitempty` (default false) |
 | `WithCustomConverter(type, conv)` | Register a custom `Converter` |

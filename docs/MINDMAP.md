@@ -38,7 +38,7 @@ EncodingError / DecodingError        ✔  contextual errors
 Err* sentinels                       ✔  errors.Is targets
 
 <OPT> options (functional):
-  WithTagPriority  WithMaxDepth  WithTimeLayout
+  WithTagPriority  WithMaxDepth  WithMaxSliceIndex  WithTimeLayout
   WithZeroEmpty    WithCustomConverter
   WithTextMarshalerSupport  WithStrictUnmarshal
   WithMaxBodySize  WithMaxFileSize

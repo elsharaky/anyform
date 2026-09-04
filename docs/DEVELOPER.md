@@ -126,6 +126,7 @@ instance in the Encoder/Decoder API.
 |---|---|---|
 | `WithTagPriority(...tags)` | `form>json>xml>protobuf` | Change marshal tag order |
 | `WithMaxDepth(n)` | `32` | Max nesting depth → `ErrMaxDepthExceeded` |
+| `WithMaxSliceIndex(n)` | `100000` | Max slice growth from a client `[i]` index (0 = unlimited) → `DecodingError` |
 | `WithTimeLayout(layout)` | `time.RFC3339` | `time.Time` format string |
 | `WithZeroEmpty(bool)` | `false` | Omit all zero-valued fields on marshal |
 | `WithCustomConverter(type, conv)` | built-ins | Override a type's (un)marshal |

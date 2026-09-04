@@ -222,3 +222,44 @@ func TestStrictUnknownFilePartViaDecoder(t *testing.T) {
 		t.Fatalf("expected DecodingError with Key=unknown, got %v", err)
 	}
 }
+
+// Embedded structs can carry both value and file fields; the multipart file
+// path recurses into the embedded struct directly and must land on the outer
+// File field.
+type embedFileMeta struct {
+	Title string `form:"title"`
+}
+
+type embedUploadReq struct {
+	embedFileMeta
+	Doc File `form:"doc"`
+}
+
+func TestUnmarshal_EmbeddedStructFileMultipart(t *testing.T) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+	if fw, err := mw.CreateFormField("title"); err != nil {
+		t.Fatalf("create field: %v", err)
+	} else if _, err := fw.Write([]byte("t1")); err != nil {
+		t.Fatalf("write field: %v", err)
+	}
+	if pw, err := mw.CreateFormFile("doc", "report.pdf"); err != nil {
+		t.Fatalf("create file: %v", err)
+	} else if _, err := pw.Write([]byte("%PDF-1.5")); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	if err := mw.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	var r embedUploadReq
+	if err := Unmarshal(buf.Bytes(), mw.FormDataContentType(), &r); err != nil {
+		t.Fatalf("unmarshal multipart error: %v", err)
+	}
+	if r.Title != "t1" {
+		t.Errorf("Title = %q, want %q", r.Title, "t1")
+	}
+	if r.Doc.Filename != "report.pdf" || string(r.Doc.Content) != "%PDF-1.5" {
+		t.Errorf("Doc = %+v, want filename report.pdf", r.Doc)
+	}
+}
