@@ -108,10 +108,23 @@
 //   - Tag skip semantics: a field is omitted when the first tag in priority
 //     order is "-". A json:"-" with an earlier form tag still participates.
 //   - ,omitempty and the global WithZeroEmpty omit empty values on marshal.
+//     Zero values are otherwise emitted, including zero time.Time values
+//     (formatted per the configured layout).
 //   - ,required produces ErrMissingRequired when the field is absent.
 //   - ,default:v populates an absent field with v (scalar kinds only).
 //   - ,strict (WithStrictUnmarshal) reports unknown keys as errors. This covers
 //     both value fields and multipart file parts.
+//   - Ambiguous keys are rejected: when two different fields resolve to the
+//     same key (an embedded promoted field and an outer field sharing a tag,
+//     or two sibling fields sharing a tag), unmarshal returns a DecodingError
+//     for that key instead of silently routing one field's payload into the
+//     other. This applies to value keys and multipart file parts alike; a
+//     colliding file part would otherwise be consumed by every matching File
+//     field. Strict mode is not required.
+//   - Every decode failure is a *DecodingError, so errors.As(err,
+//     &*DecodingError{}) always succeeds — even for plain scalar parse
+//     failures (int overflow, bad bool), which previously escaped as bare
+//     errors.
 //   - WithMaxBodySize limits the whole body passed to Unmarshal
 //     (ErrBodyTooLarge); WithMaxFileSize limits each file part
 //     (ErrFileTooLarge). Both are 0 (= unlimited) by default. A file part

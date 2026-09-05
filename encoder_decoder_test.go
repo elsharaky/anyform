@@ -2,9 +2,11 @@ package anyform
 
 import (
 	"bytes"
+	"errors"
 	"mime/multipart"
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -599,5 +601,141 @@ func TestDecoder_Unmarshal_ArrayWithinRange(t *testing.T) {
 	}
 	if a.Items[1] != "x" {
 		t.Errorf("Items[1] = %q", a.Items[1])
+	}
+}
+
+// Regression: a tag name shared by an embedded (promoted) field and an outer
+// field, or by two sibling fields, previously decoded one field's payload into
+// whichever field the index happened to register last — the other field was
+// silently zeroed, with no error even under WithStrictUnmarshal.
+type decodeInner struct {
+	Name string `form:"name"`
+}
+
+type decodeCollideOuter struct {
+	decodeInner
+	Name string `form:"name"`
+}
+
+type decodeCollideSiblings struct {
+	A string `form:"name"`
+	B string `form:"name"`
+}
+
+func TestDecoder_Unmarshal_AmbiguousField(t *testing.T) {
+	dec := NewDecoder()
+	var out decodeCollideOuter
+	err := dec.Unmarshal(url.Values{"name": {"inner-value"}}, &out)
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %v", err)
+	}
+	if de.Key != "name" {
+		t.Errorf("Key = %q, want %q", de.Key, "name")
+	}
+	// Neither field may be written when the key is ambiguous.
+	if out.Name != "" || out.decodeInner.Name != "" {
+		t.Errorf("fields mutated despite ambiguous key: %+v", out)
+	}
+}
+
+func TestDecoder_Unmarshal_AmbiguousFieldSiblings(t *testing.T) {
+	dec := NewDecoder(WithStrictUnmarshal(true))
+	var out decodeCollideSiblings
+	err := dec.Unmarshal(url.Values{"name": {"x"}}, &out)
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %v", err)
+	}
+	if de.Key != "name" {
+		t.Errorf("Key = %q, want %q", de.Key, "name")
+	}
+	if out.A != "" || out.B != "" {
+		t.Errorf("fields mutated despite ambiguous key: %+v", out)
+	}
+}
+
+func TestDecoder_Unmarshal_AmbiguousNestedField(t *testing.T) {
+	type inner struct {
+		V string `form:"v"`
+	}
+	type collide struct {
+		X inner  `form:"x"`
+		V string `form:"x"` // tag collides with the struct field's key
+	}
+	var out collide
+	err := NewDecoder().Unmarshal(url.Values{"x.v": {"val"}}, &out)
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %v", err)
+	}
+	if de.Key != "x.v" {
+		t.Errorf("Key = %q, want %q", de.Key, "x.v")
+	}
+	if strings.Contains(de.Err.Error(), "ambiguous") == false {
+		t.Errorf("expected ambiguous-cause message, got %v", de.Err)
+	}
+}
+
+// Regression: a scalar parse failure on a plain field (int overflow, bad bool)
+// escaped as a bare error, unlike the same failure reached via a map/slice
+// value. Every decode failure must satisfy errors.As(..., &DecodingError{}).
+func TestDecoder_Unmarshal_ScalarErrorWrapped(t *testing.T) {
+	type s struct {
+		Int  int   `form:"int"`
+		Bool bool  `form:"bool"`
+		S    []int `form:"s"`
+	}
+	dec := NewDecoder()
+
+	for _, key := range []string{"int", "bool", "s[0]"} {
+		var out s
+		var raw string
+		switch key {
+		case "int":
+			raw = "999999999999999999999"
+		case "bool":
+			raw = "notabool"
+		case "s[0]":
+			raw = "999999999999999999999"
+		}
+		err := dec.Unmarshal(url.Values{key: {raw}}, &out)
+		var de *DecodingError
+		if !errors.As(err, &de) {
+			t.Errorf("%s: expected DecodingError, got %v", key, err)
+			continue
+		}
+		if de.Err == nil {
+			t.Errorf("%s: DecodingError has nil cause", key)
+		}
+	}
+}
+
+// Regression: zero-valued time.Time was unconditionally omitted from marshal
+// output, unlike every other type (int → "0", string → ""), contradicting the
+// documented default that zero values are emitted. It now formats normally.
+func TestEncoder_Marshal_ZeroTimeEmitted(t *testing.T) {
+	type s struct {
+		When time.Time `form:"when"`
+	}
+	vals, err := NewEncoder().Marshal(s{})
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if vals.Get("when") != "0001-01-01T00:00:00Z" {
+		t.Errorf("when = %q, want %q", vals.Get("when"), "0001-01-01T00:00:00Z")
+	}
+}
+
+func TestEncoder_Marshal_ZeroTimeOmittedWithOmitEmpty(t *testing.T) {
+	type s struct {
+		When time.Time `form:"when"`
+	}
+	vals, err := NewEncoder(WithZeroEmpty(true)).Marshal(s{})
+	if err != nil {
+		t.Fatalf("marshal error: %v", err)
+	}
+	if vals.Has("when") {
+		t.Errorf("zero time should be omitted under WithZeroEmpty, got %v", vals)
 	}
 }

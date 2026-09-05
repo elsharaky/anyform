@@ -88,62 +88,6 @@ func (r *tagResolver) firstExistingTag(sf reflect.StructField) (tagOptions, bool
 	return tagOptions{}, false
 }
 
-// unmarshalFieldName returns the Go field name that matches the given form key.
-// It scans the struct type and returns the field whose tag matches the key.
-// If multiple tags on different fields match, the priority order determines
-// which wins.
-func (r *tagResolver) unmarshalFieldName(t reflect.Type, key string) (reflect.StructField, bool) {
-	if t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	if t.Kind() != reflect.Struct {
-		return reflect.StructField{}, false
-	}
-
-	// First scan direct fields and embedded structs (flattened namespace).
-	for i := range t.NumField() {
-		sf := t.Field(i)
-
-		// Recurse into anonymous embedded structs, flattening their fields
-		// into the parent namespace. Handled before the export check because
-		// anonymous fields use the (possibly lowercase) type name.
-		if sf.Anonymous && sf.Type.Kind() == reflect.Struct {
-			if inner, ok := r.unmarshalFieldName(sf.Type, key); ok {
-				return inner, true
-			}
-			continue
-		}
-
-		if !sf.IsExported() {
-			continue
-		}
-
-		if r.isSkipped(sf) {
-			continue
-		}
-
-		for _, tag := range r.priority {
-			val, ok := sf.Tag.Lookup(tag)
-			if !ok {
-				continue
-			}
-			opts := parseTagOptions(val)
-			if opts.Skip {
-				break
-			}
-			if opts.Name == key {
-				return sf, true
-			}
-		}
-
-		if sf.Name == key {
-			return sf, true
-		}
-	}
-
-	return reflect.StructField{}, false
-}
-
 // unmarshalTagNames returns all non-skip tag names for a field, in priority
 // order, plus the Go field name as a fallback. If the field is skipped (first
 // tag in priority is "-"), skip is returned true and names is nil.
@@ -181,25 +125,6 @@ func (r *tagResolver) isSkipped(sf reflect.StructField) bool {
 		return false
 	}
 	return opts.Skip
-}
-
-// unmarshalFieldTagValue returns the tag value for a given tag key from a struct field.
-func unmarshalFieldTagValue(sf reflect.StructField, tagName string) (string, bool) {
-	val, ok := sf.Tag.Lookup(tagName)
-	if !ok {
-		return "", false
-	}
-	opts := parseTagOptions(val)
-	return opts.Name, !opts.Skip
-}
-
-// unmarshalFieldTagOptions returns the parsed tag options for a specific tag.
-func unmarshalFieldTagOptions(sf reflect.StructField, tagName string) (tagOptions, bool) {
-	val, ok := sf.Tag.Lookup(tagName)
-	if !ok {
-		return tagOptions{}, false
-	}
-	return parseTagOptions(val), true
 }
 
 // parseTagOptions parses a struct tag value like "name,omitempty,required,default:foo".
@@ -275,6 +200,16 @@ func parseProtobufFieldName(parts []string) (string, bool) {
 	return "", false
 }
 
+// unmarshalIndex is the resolved tag→field map for a struct type, plus every
+// key that is ambiguous — resolving to more than one distinct field (e.g. an
+// embedded struct field and an outer field sharing a tag name). An ambiguous
+// key is a struct-design error: unmarshal rejects it instead of writing one
+// field's payload into a sibling.
+type unmarshalIndex struct {
+	fields    map[string]reflect.StructField
+	ambiguous map[string]bool
+}
+
 // unmarshalIndexKey identifies a built unmarshal index in the shared cache.
 // The tag priority is part of the key because the index is priority-dependent.
 type unmarshalIndexKey struct {
@@ -286,36 +221,54 @@ type unmarshalIndexKey struct {
 // way encoding/json caches its type fields. Building an index is pure
 // reflection and never mutates the type, so results are safe to share across
 // all decoders and goroutines.
-var unmarshalIndexCache sync.Map // key: unmarshalIndexKey, value: map[string]reflect.StructField
+var unmarshalIndexCache sync.Map // key: unmarshalIndexKey, value: unmarshalIndex
 
 // buildUnmarshalIndex builds a map from every possible tag value and Go field name
 // to the corresponding struct field, for efficient lookup during unmarshalling.
 // It checks all tags in priority order and registers every non-skip name.
 // Results are cached per (type, tag priority) and reused across calls.
-func (r *tagResolver) buildUnmarshalIndex(t reflect.Type) map[string]reflect.StructField {
+func (r *tagResolver) buildUnmarshalIndex(t reflect.Type) unmarshalIndex {
 	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
-		return nil
+		return unmarshalIndex{}
 	}
 
 	key := unmarshalIndexKey{t: t, priority: strings.Join(r.priority, ",")}
-	if cached, ok := unmarshalIndexCache.Load(key); ok {
-		m, _ := cached.(map[string]reflect.StructField)
-		return m
+	idx, ok := func() (unmarshalIndex, bool) {
+		cached, ok := unmarshalIndexCache.Load(key)
+		if !ok {
+			return unmarshalIndex{}, false
+		}
+		idx, _ := cached.(unmarshalIndex)
+		return idx, true
+	}()
+	if ok {
+		return idx
 	}
 
 	index := r.buildUnmarshalIndexUncached(t)
 	actual, _ := unmarshalIndexCache.LoadOrStore(key, index)
-	m, _ := actual.(map[string]reflect.StructField)
-	return m
+	idx, _ = actual.(unmarshalIndex)
+	return idx
 }
 
 // buildUnmarshalIndexUncached performs the actual reflection walk. Callers
 // should use buildUnmarshalIndex, which caches the result per struct type.
-func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) map[string]reflect.StructField {
-	index := make(map[string]reflect.StructField)
+func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) unmarshalIndex {
+	fields := make(map[string]reflect.StructField)
+	ambiguous := make(map[string]bool)
+
+	// register maps a name to a field. If the name is already taken by a
+	// DIFFERENT physical field (its index path differs), the name is
+	// ambiguous; the same field re-registering under other tags is not.
+	register := func(name string, sf reflect.StructField) {
+		if prev, ok := fields[name]; ok && !reflect.DeepEqual(prev.Index, sf.Index) {
+			ambiguous[name] = true
+		}
+		fields[name] = sf
+	}
 
 	for i := range t.NumField() {
 		sf := t.Field(i)
@@ -325,7 +278,7 @@ func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) map[string]ref
 		// (possibly lowercase) type name.
 		if sf.Anonymous && sf.Type.Kind() == reflect.Struct {
 			inner := r.buildUnmarshalIndex(sf.Type)
-			for k, v := range inner {
+			for k, v := range inner.fields {
 				// The promoted field's Index is relative to the EMBEDDED type;
 				// prepend this anonymous field's own index so that a later
 				// FieldByIndex(v.Index) resolves on the parent struct. Copy
@@ -335,7 +288,10 @@ func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) map[string]ref
 				idx = append(idx, sf.Index...)
 				idx = append(idx, v.Index...)
 				v.Index = idx
-				index[k] = v
+				register(k, v)
+			}
+			for k := range inner.ambiguous {
+				ambiguous[k] = true
 			}
 			continue
 		}
@@ -355,12 +311,12 @@ func (r *tagResolver) buildUnmarshalIndexUncached(t reflect.Type) map[string]ref
 			}
 			opts := parseTagOptions(val)
 			if opts.Name != "" {
-				index[opts.Name] = sf
+				register(opts.Name, sf)
 			}
 		}
 
-		index[sf.Name] = sf
+		register(sf.Name, sf)
 	}
 
-	return index
+	return unmarshalIndex{fields: fields, ambiguous: ambiguous}
 }

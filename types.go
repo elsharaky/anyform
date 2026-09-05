@@ -32,9 +32,6 @@ func (c *timeConverter) Marshal(value reflect.Value) (string, error) {
 	if !ok {
 		return "", &EncodingError{Err: errors.New("anyform: value is not time.Time")}
 	}
-	if t.IsZero() {
-		return "", nil
-	}
 	return t.Format(c.layout), nil
 }
 
