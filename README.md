@@ -256,7 +256,8 @@ anyform.Unmarshal(body, ct, &got) // reconstructs all nested fields
 - A field is **skipped** when the first tag in priority order is `-`
   (`json:"-"` with an earlier `form` tag still participates via `form`).
 - `,omitempty` (and the global `WithZeroEmpty`) omit empty values on marshal.
-- Zero values are emitted by default (`age=0`, `name=`) unless omitted.
+- Zero values are emitted by default (`age=0`, `name=`, zero `time.Time` →
+  `0001-01-01T00:00:00Z`) unless omitted.
 
 ### Unmarshaller semantics
 
@@ -267,6 +268,16 @@ anyform.Unmarshal(body, ct, &got) // reconstructs all nested fields
 - Any tag name in the priority list is accepted as the submitted key, for
   value fields **and** `File`/`[]File` fields.
 - Nil pointers are allocated; absent fields keep their zero value.
+- **Ambiguous keys are errors.** If two different fields resolve to the same
+  key (an embedded promoted field and an outer field sharing a tag, or two
+  sibling fields sharing a tag), unmarshal rejects that key with a
+  `DecodingError` instead of silently writing one field's payload into the
+  other. This applies to value keys **and** multipart file parts (a colliding
+  file part would otherwise be consumed by every matching `File` field).
+  `WithStrictUnmarshal` is not required to catch this.
+- Every decode failure is a `*DecodingError`, so `errors.As(err, &*DecodingError{})`
+  always succeeds — including plain scalar parse failures (int overflow, bad
+  bool, ...), not just errors reached via nested map/slice values.
 
 ### Server hardening
 

@@ -57,7 +57,14 @@ func TestFileFieldValuePartClearError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got := err.Error(); got != "cannot decode value part into File field: multipart file parts must include a filename" {
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %T: %v", err, err)
+	}
+	if de.FieldPath != "avatar" {
+		t.Errorf("FieldPath = %q, want %q", de.FieldPath, "avatar")
+	}
+	if got := de.Err.Error(); got != "cannot decode value part into File field: multipart file parts must include a filename" {
 		t.Fatalf("unexpected message: %q", got)
 	}
 }
@@ -73,7 +80,14 @@ func TestFileSliceFieldValuePartClearError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got := err.Error(); got != "cannot decode value part into []File field: multipart file parts must include a filename" {
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %T: %v", err, err)
+	}
+	if de.FieldPath != "docs" {
+		t.Errorf("FieldPath = %q, want %q", de.FieldPath, "docs")
+	}
+	if got := de.Err.Error(); got != "cannot decode value part into []File field: multipart file parts must include a filename" {
 		t.Fatalf("unexpected message: %q", got)
 	}
 }
@@ -89,7 +103,14 @@ func TestFilePtrFieldValuePartClearError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if got := err.Error(); got != "cannot decode value part into File field: multipart file parts must include a filename" {
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %T: %v", err, err)
+	}
+	if de.FieldPath != "avatar" {
+		t.Errorf("FieldPath = %q, want %q", de.FieldPath, "avatar")
+	}
+	if got := de.Err.Error(); got != "cannot decode value part into File field: multipart file parts must include a filename" {
 		t.Fatalf("unexpected message: %q", got)
 	}
 }
@@ -261,5 +282,55 @@ func TestUnmarshal_EmbeddedStructFileMultipart(t *testing.T) {
 	}
 	if r.Doc.Filename != "report.pdf" || string(r.Doc.Content) != "%PDF-1.5" {
 		t.Errorf("Doc = %+v, want filename report.pdf", r.Doc)
+	}
+}
+
+// Regression: two File fields sharing a tag name (siblings, or an embedded
+// promoted File plus an outer File) must not both consume the same file part.
+// Previously each matching field received the part; now the part is rejected
+// as ambiguous, mirroring the value-path behavior.
+type embedFileCollide struct {
+	Doc File `form:"doc"`
+}
+
+type uploadFileCollide struct {
+	embedFileCollide
+	Doc File `form:"doc"`
+}
+
+func TestUnmarshal_AmbiguousFilePartSiblings(t *testing.T) {
+	type S struct {
+		Doc  File `form:"doc"`
+		Blob File `form:"doc"`
+	}
+
+	body, ct := buildAliasBody(t, "doc", "dup")
+	var v S
+	err := Unmarshal(body, ct, &v)
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %v", err)
+	}
+	if de.Key != "doc" {
+		t.Errorf("Key = %q, want %q", de.Key, "doc")
+	}
+	if v.Doc.Content != nil || v.Blob.Content != nil {
+		t.Errorf("fields consumed despite ambiguous part: %+v", v)
+	}
+}
+
+func TestUnmarshal_AmbiguousFilePartEmbedded(t *testing.T) {
+	body, ct := buildAliasBody(t, "doc", "dup")
+	var v uploadFileCollide
+	err := Unmarshal(body, ct, &v)
+	var de *DecodingError
+	if !errors.As(err, &de) {
+		t.Fatalf("expected DecodingError, got %v", err)
+	}
+	if de.Key != "doc" {
+		t.Errorf("Key = %q, want %q", de.Key, "doc")
+	}
+	if v.Doc.Content != nil || v.embedFileCollide.Doc.Content != nil {
+		t.Errorf("fields consumed despite ambiguous part: %+v", v)
 	}
 }

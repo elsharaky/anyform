@@ -158,7 +158,11 @@ func (d *Decoder) unmarshalValues(values url.Values, dst reflect.Value, depth in
 
 	for key, vals := range values {
 		base, rest := parseKeyPath(key)
-		field, ok := index[base]
+		if index.ambiguous[base] {
+			return &DecodingError{Key: key,
+				Err: fmt.Errorf("ambiguous field %q matches more than one field", base)}
+		}
+		field, ok := index.fields[base]
 		if !ok {
 			if d.cfg.strict {
 				return &DecodingError{Key: key, Err: fmt.Errorf("unknown field %q", base)}
@@ -171,7 +175,7 @@ func (d *Decoder) unmarshalValues(values url.Values, dst reflect.Value, depth in
 			continue
 		}
 
-		if err := d.decodePath(fieldVal, rest, vals, depth+1); err != nil {
+		if err := d.decodePath(fieldVal, rest, vals, depth+1, base); err != nil {
 			return err
 		}
 	}
@@ -180,7 +184,9 @@ func (d *Decoder) unmarshalValues(values url.Values, dst reflect.Value, depth in
 }
 
 // decodePath walks the parsed key tokens and assigns the leaf value(s).
-func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string, depth int) error {
+// path is the accumulated form key (e.g. "address.city" or "items[3]") used
+// to give decode errors a meaningful FieldPath.
+func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string, depth int, path string) error {
 	if depth > d.cfg.maxDepth {
 		return &DecodingError{Err: ErrMaxDepthExceeded}
 	}
@@ -194,8 +200,17 @@ func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string
 	}
 
 	if len(rest) == 0 {
-		// Leaf: assign value(s) to this field.
-		return d.assignLeaf(field, vals)
+		// Leaf: assign value(s) to this field. Keep the error type consistent
+		// with every other decode path — a scalar parse failure (int overflow,
+		// bad bool, ...) must still satisfy errors.As(..., &DecodingError{}).
+		if err := d.assignLeaf(field, vals); err != nil {
+			var de *DecodingError
+			if errors.As(err, &de) {
+				return de
+			}
+			return &DecodingError{FieldPath: path, Err: err}
+		}
+		return nil
 	}
 
 	head := rest[0]
@@ -210,15 +225,19 @@ func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string
 				return &DecodingError{Err: errors.New("cannot descend into File; use UnmarshalMultipartForm")}
 			}
 			childIndex := d.resolver.buildUnmarshalIndex(field.Type())
-			child, ok := childIndex[head.name]
+			if childIndex.ambiguous[head.name] {
+				return &DecodingError{FieldPath: head.name,
+					Err: fmt.Errorf("ambiguous field %q matches more than one field", head.name)}
+			}
+			child, ok := childIndex.fields[head.name]
 			if !ok {
 				return &DecodingError{FieldPath: head.name, Err: errors.New("unknown field")}
 			}
 			childVal := field.FieldByIndex(child.Index)
-			return d.decodePath(childVal, tail, vals, depth+1)
+			return d.decodePath(childVal, tail, vals, depth+1, path+"."+head.name)
 		case reflect.Slice, reflect.Array:
 			// slice of struct accessed without index (rare) — treat as append
-			return d.decodePath(field, tail, vals, depth+1)
+			return d.decodePath(field, tail, vals, depth+1, path+"."+head.name)
 		case reflect.Map:
 			// map accessed via .field — not supported; skip
 			return nil
@@ -259,7 +278,7 @@ func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string
 			}
 		}
 		elem := field.Index(idx)
-		return d.decodePath(elem, tail, vals, depth+1)
+		return d.decodePath(elem, tail, vals, depth+1, path+"["+head.name+"]")
 
 	case "mapkey":
 		if field.Kind() != reflect.Map {
@@ -286,7 +305,7 @@ func (d *Decoder) decodePath(field reflect.Value, rest []keyToken, vals []string
 		// Map value is complex (struct/slice); descending requires a settable
 		// value. Create it, decode, then set.
 		val := reflect.New(field.Type().Elem()).Elem()
-		if err := d.decodePath(val, tail, vals, depth+1); err != nil {
+		if err := d.decodePath(val, tail, vals, depth+1, path); err != nil {
 			return &DecodingError{FieldPath: head.name, Err: err}
 		}
 		field.SetMapIndex(mapKey, val)
@@ -403,6 +422,19 @@ func (d *Decoder) readFile(fh *multipart.FileHeader, name string) (File, error) 
 func (d *Decoder) unmarshalFiles(mf *multipart.Form, dst reflect.Value) error {
 	if len(mf.File) == 0 {
 		return nil
+	}
+
+	// Reject file parts whose name resolves to more than one field (an
+	// embedded promoted File and an outer File sharing a tag, or two sibling
+	// File fields sharing a tag): they would otherwise be consumed by every
+	// matching field. Mirrors the value-path ambiguity check; the flattened
+	// index covers both sibling and embedded/outer collisions.
+	index := d.resolver.buildUnmarshalIndex(dst.Type())
+	for part := range mf.File {
+		if index.ambiguous[part] {
+			return &DecodingError{Key: part,
+				Err: fmt.Errorf("ambiguous field %q matches more than one field", part)}
+		}
 	}
 
 	rt := dst.Type()

@@ -132,48 +132,6 @@ func TestTagResolver_PriorityOrder(t *testing.T) {
 	}
 }
 
-func TestTagResolver_unmarshalFieldName(t *testing.T) {
-	r := newTagResolver()
-	tp := reflect.TypeOf(testMarshalTags{})
-
-	tests := []struct {
-		key      string
-		wantName string
-		wantOk   bool
-	}{
-		{"user_name", "Name", true},       // matches form tag
-		{"user_email", "Email", true},     // matches json tag
-		{"age_xml", "Age", true},          // matches xml tag
-		{"age", "Age", true},              // matches json tag
-		{"proto_field", "Protobuf", true}, // matches protobuf tag
-		{"NoTag", "NoTag", true},          // matches Go name
-		{"nonexistent", "", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.key, func(t *testing.T) {
-			field, ok := r.unmarshalFieldName(tp, tt.key)
-			if ok != tt.wantOk {
-				t.Fatalf("ok = %v, want %v", ok, tt.wantOk)
-			}
-			if tt.wantOk && field.Name != tt.wantName {
-				t.Errorf("got field %q, want %q", field.Name, tt.wantName)
-			}
-		})
-	}
-}
-
-func TestTagResolver_unmarshalFieldName_Skipped(t *testing.T) {
-	r := newTagResolver()
-	tp := reflect.TypeOf(testMarshalTags{})
-
-	// Skipped fields should not be found by their tag name
-	_, ok := r.unmarshalFieldName(tp, "-")
-	if ok {
-		t.Error("expected skipped field not to be found")
-	}
-}
-
 func TestTagResolver_buildUnmarshalIndex(t *testing.T) {
 	r := newTagResolver()
 	tp := reflect.TypeOf(testMarshalTags{})
@@ -191,18 +149,18 @@ func TestTagResolver_buildUnmarshalIndex(t *testing.T) {
 	}
 
 	for _, key := range expectedKeys {
-		if _, ok := idx[key]; !ok {
+		if _, ok := idx.fields[key]; !ok {
 			t.Errorf("key %q not found in unmarshal index", key)
 		}
 	}
 
 	// Skipped fields should NOT be in the index
-	if _, ok := idx["-"]; ok {
+	if _, ok := idx.fields["-"]; ok {
 		t.Error("skipped field should not be in index")
 	}
 	// Ignored field (json:"-") has its first existing tag as "-", so it is fully
 	// excluded from the index (neither its json value nor its Go name).
-	if _, ok := idx["Ignored"]; ok {
+	if _, ok := idx.fields["Ignored"]; ok {
 		t.Error("field ignored via first-existing-tag '-' should not be in index")
 	}
 }
@@ -217,23 +175,20 @@ func TestTagResolver_buildUnmarshalIndexCache(t *testing.T) {
 	def := newTagResolver()
 	a := def.buildUnmarshalIndex(tp)
 	b := def.buildUnmarshalIndex(tp)
-	if a == nil || b == nil {
-		t.Fatal("buildUnmarshalIndex returned nil")
-	}
-	if len(a) == 0 {
+	if len(a.fields) == 0 {
 		t.Fatal("index is empty")
 	}
 
 	// Content must be identical across repeated (cached) builds.
-	if len(a) != len(b) {
-		t.Fatalf("cached index size changed: %d != %d", len(a), len(b))
+	if len(a.fields) != len(b.fields) {
+		t.Fatalf("cached index size changed: %d != %d", len(a.fields), len(b.fields))
 	}
 	// The cache must actually reuse the same map, not rebuild a fresh one.
-	if reflect.ValueOf(a).Pointer() != reflect.ValueOf(b).Pointer() {
+	if reflect.ValueOf(a.fields).Pointer() != reflect.ValueOf(b.fields).Pointer() {
 		t.Error("expected cached map identity across repeated builds")
 	}
-	for k, sf := range a {
-		other, ok := b[k]
+	for k, sf := range a.fields {
+		other, ok := b.fields[k]
 		if !ok {
 			t.Fatalf("key %q missing from second build", k)
 		}
@@ -246,11 +201,11 @@ func TestTagResolver_buildUnmarshalIndexCache(t *testing.T) {
 	// mutated/partial result from the shared cache.
 	jsonFirst := newTagResolver("json", "form", "xml", "protobuf")
 	c := jsonFirst.buildUnmarshalIndex(tp)
-	if len(c) != len(a) {
-		t.Fatalf("priority-reordered index size changed: %d != %d", len(c), len(a))
+	if len(c.fields) != len(a.fields) {
+		t.Fatalf("priority-reordered index size changed: %d != %d", len(c.fields), len(a.fields))
 	}
-	for k, sf := range a {
-		other, ok := c[k]
+	for k, sf := range a.fields {
+		other, ok := c.fields[k]
 		if !ok {
 			t.Fatalf("key %q missing from reordered-priority build", k)
 		}
@@ -335,44 +290,26 @@ func TestTagResolver_EmbeddedStruct(t *testing.T) {
 	r := newTagResolver()
 	tp := reflect.TypeOf(testEmbeddedStruct{})
 
-	// Should find fields from embedded struct
-	field, ok := r.unmarshalFieldName(tp, "user_name")
+	idx := r.buildUnmarshalIndex(tp)
+
+	// Fields from the embedded struct are promoted into the parent index with
+	// the anonymous field's index prepended (Index[0] = the embedded field).
+	field, ok := idx.fields["user_name"]
 	if !ok || field.Name != "Name" {
-		t.Errorf("expected to find Name via form tag in embedded struct")
+		t.Errorf("expected to find Name via form tag in embedded struct, got %v ok=%v", field.Name, ok)
+	}
+	if len(field.Index) < 1 || field.Index[0] != 0 {
+		t.Errorf("promoted Name Index = %v, want leading 0 (embedded path)", field.Index)
 	}
 
-	// Should find direct field
-	field, ok = r.unmarshalFieldName(tp, "extra")
+	// Direct field resolves normally.
+	field, ok = idx.fields["extra"]
 	if !ok || field.Name != "Extra" {
-		t.Errorf("expected to find Extra via form tag")
-	}
-}
-
-func TestUnmarshalFieldTagValue(t *testing.T) {
-	sf := reflect.TypeOf(testMarshalTags{}).Field(0) // Name with form:"user_name"
-
-	name, ok := unmarshalFieldTagValue(sf, "form")
-	if !ok || name != "user_name" {
-		t.Errorf("got %q, %v; want user_name, true", name, ok)
+		t.Errorf("expected to find Extra via form tag, got %v ok=%v", field.Name, ok)
 	}
 
-	_, ok = unmarshalFieldTagValue(sf, "nonexistent")
-	if ok {
-		t.Error("expected false for nonexistent tag")
-	}
-}
-
-func TestUnmarshalFieldTagOptions(t *testing.T) {
-	sf := reflect.TypeOf(testMarshalTags{}).Field(7) // Required
-
-	opts, ok := unmarshalFieldTagOptions(sf, "form")
-	if !ok {
-		t.Fatal("expected true")
-	}
-	if !opts.Required {
-		t.Error("expected Required=true")
-	}
-	if opts.Name != "required_field" {
-		t.Errorf("got name %q, want %q", opts.Name, "required_field")
+	// No key is ambiguous for this struct.
+	if len(idx.ambiguous) != 0 {
+		t.Errorf("unexpected ambiguous keys: %v", idx.ambiguous)
 	}
 }
