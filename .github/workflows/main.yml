@@ -1,18 +1,24 @@
 name: Version
 
-# Only trigger when a pull request is merged into `main` (no release on bare
-# pushes). On merge, semantic-release (per .releaserc) decides whether this
-# merge produces a release:
-#   - work commits (feat/fix/perf/breaking) are pins to `release: false` and
-#     ACCUMULATE silently, tag + release are withheld;
-#   - an explicit release-marker commit (`release(patch|minor|major): ...`)
-#     publishes, bumping from the last tag and including every accumulated
-#     work commit since it in the changelog.
-# Releases never happen automatically from a fix/feat alone — they need the
-# marker. Tags vX.Y.Z and publishes the GitHub Release, all from CI.
+# Trigger on every push to `main` — NOT on `pull_request: closed`.
+# semantic-release refuses to publish on any pull_request event (even
+# `closed`): env-ci reports isPr=true and its core logs "This run was
+# triggered by a pull request and therefore a new version won't be
+# published." Only a push event (isPr=false) can release, so merging a PR
+# necessarily goes through this path: the merge itself is a push to `main`.
+#
+# The marker model is unchanged (see .releaserc): each run analyzes the
+# commits in the release window since the last tag. Work commits
+# (feat/fix/perf/breaking) are pinned to `release: false`, so they ACCUMULATE
+# silently and never release by themselves; an explicit release-marker commit
+# (`release(patch|minor|major): ...`) is the only thing that publishes,
+# bumping from the last tag and including every accumulated work commit since
+# it in the changelog.
+#
+# Tag pushes (refs/tags/*) do not match `branches: [main]`, so semantic-release
+# pushing the next tag never re-triggers this workflow.
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
 
 # Serialize release runs: if two PRs merge close together, only one job may
@@ -29,9 +35,9 @@ jobs:
     name: Semantic Release
     # The repo guard keeps this job from running in forks.
     # NOTE: github.actor != 'github-actions[bot]' is defense-in-depth only and
-    # not a functional safeguard against loops — on pull_request: closed the
-    # actor is the person who merged the PR, never the release bot.
-    if: github.repository == 'elsharaky/goform' && github.event.pull_request.merged == true && github.actor != 'github-actions[bot]'
+    # not a functional safeguard against loops — on push the actor is the
+    # person who pushed the merge, never the release bot.
+    if: github.repository == 'elsharaky/goform' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       # Check out the merged state of `main` (not the PR head) so release
