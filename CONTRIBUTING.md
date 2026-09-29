@@ -64,9 +64,12 @@ Example: `feat: add support for custom tag priority`
 `semantic-release` in the [Version workflow](.github/workflows/main.yml). Two
 rules make releases predictable:
 
-1. **Work never releases by itself.** Merging `feat:`, `fix:`, or `perf:`
-   commits only *accumulates* changes — no tag, no release. This lets several
-   fixes land and ship together.
+1. **Work never releases by itself.** Commits that land on `main` — `feat:`,
+   `fix:`, or `perf:` included — only *accumulate*; no tag, no release. This
+   lets several fixes land and ship together. The [Version
+   workflow](.github/workflows/main.yml) runs on every push to `main` and maps
+   each commit through `.releaserc`; ordinary work is pinned to `release:
+   false`.
 2. **A marker releases everything accumulated.** A release happens only when a
    PR merged into `main` includes a marker commit. Its scope picks the bump and
    its notes include **every** work commit since the previous release tag:

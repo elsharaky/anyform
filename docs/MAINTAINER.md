@@ -382,9 +382,18 @@ explains the workflow in `.github/workflows/main.yml`, the rules in
 
 ### 11.1 The trigger
 
-The `Version` workflow fires on `pull_request` closed + **merged** into `main`
-(no release on bare pushes), with a `release` concurrency group so two close
-merges can't race on tag creation. It checks out the merged state of `main`
+The `Version` workflow fires on every `push` to `main` — **not** on
+`pull_request: closed`. This is a hard constraint of semantic-release, not a
+style choice: env-ci reports `isPr=true` for *any* `pull_request` event (even
+`closed`), and semantic-release's core then logs "This run was triggered by a
+pull request and therefore a new version won't be published." and exits
+without tagging. Only a `push` event (`isPr=false`, branch `main`) can
+release — which the merge of a PR into `main` always is. Tag pushes
+(`refs/tags/*`) don't match `branches: [main]`, so semantic-release pushing
+the next tag never re-triggers the workflow.
+
+A `release` concurrency group serializes runs so two close pushes can't race
+on tag creation. The job checks out the merged state of `main`
 (`fetch-depth: 0`) and runs `go test -race ./...` as a sanity re-run; the real
 quality gate is the required `ci` check on the PR itself (vet, lint, gosec,
 govulncheck, race tests) enforced by branch protection.
@@ -444,6 +453,17 @@ SemVer and start this project at `0.1.0`, the workflow seeds an annotated
 (no-op on later runs). The first `release(minor)` marker then bumps `0.0.0 →
 0.1.0`. The seed push is why `RELEASE_TOKEN` (not the default `GITHUB_TOKEN`)
 is required — see [11.1](#111-the-trigger).
+
+**Historical artifact:** the root commit still carries an old tag-push
+`Release` workflow (`.github/workflows/release.yml`, `on: push: tags: ['v*']`).
+Because GitHub resolves workflow files at the commit a pushed tag *points to*,
+the first seed push of `v0.0.0` (at the root commit) triggered that stale
+workflow once, creating a GitHub *Release* named `v0.0.0` with auto-generated
+"Full Changelog" notes. That release is cosmetic noise — the real versioning
+signal is the **tag** `v0.0.0`, and semantic-release derives the next version
+from tags, not releases. It can be deleted from the Releases page without
+affecting future releases; later tags point at newer commits whose trees no
+longer contain that workflow, so it will never run again.
 
 ### 11.5 Making a release, step by step
 
