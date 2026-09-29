@@ -389,6 +389,16 @@ merges can't race on tag creation. It checks out the merged state of `main`
 quality gate is the required `ci` check on the PR itself (vet, lint, gosec,
 govulncheck, race tests) enforced by branch protection.
 
+**Secret requirement:** the job checks out with `secrets.RELEASE_TOKEN`, a
+fine-grained PAT (Contents: read/write, Workflows: read/write, scoped to this
+repo), and passes it to semantic-release. This is mandatory, not optional:
+GitHub hard-blocks the default `GITHUB_TOKEN` — a GitHub App credential with no
+`workflows` scope — from pushing any git ref whose range touches
+`.github/workflows/`. Our seed tag points at the root commit (which *creates*
+the workflow files), so a `GITHUB_TOKEN` push is rejected server-side no matter
+what `permissions: contents: write` says. The PAT must exist before the first
+release; without it the seed step fails and no release happens.
+
 ### 11.2 The rules (`.releaserc`)
 
 `releaseRules` are evaluated **in order, first match wins**, per commit:
@@ -432,10 +442,16 @@ Consequences:
 SemVer and start this project at `0.1.0`, the workflow seeds an annotated
 `v0.0.0` tag on the **root commit** exactly when no `v[0-9]*` tags exist yet
 (no-op on later runs). The first `release(minor)` marker then bumps `0.0.0 →
-0.1.0`.
+0.1.0`. The seed push is why `RELEASE_TOKEN` (not the default `GITHUB_TOKEN`)
+is required — see [11.1](#111-the-trigger).
 
 ### 11.5 Making a release, step by step
 
+0. **Prerequisite (first release only):** ensure the `RELEASE_TOKEN` secret
+   exists (Settings → Secrets and variables → Actions). It is a fine-grained
+   PAT with Contents: read/write + Workflows: read/write on this repo. The
+   workflow's `git push` runs as this token; the default `GITHUB_TOKEN`
+   cannot push refs that touch `.github/workflows/` (see [11.1](#111-the-trigger)).
 1. Ensure the work to ship is merged into `main` (`feat:`/`fix:`/`perf:`
    commits — they require no marker to land).
 2. Create a branch off `main`, add a **message-only** empty commit

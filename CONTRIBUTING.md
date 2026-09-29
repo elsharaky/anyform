@@ -85,6 +85,15 @@ rules make releases predictable:
 The marker commit should be message-only (no code changes). Do not bump
 versions in a PR or on the CLI; the pipeline owns versioning.
 
+### Release secret
+
+The [Version workflow](.github/workflows/main.yml) authenticates its git tag
+pushes with a fine-grained PAT stored as the `RELEASE_TOKEN` repo secret
+(Contents: read/write, Workflows: read/write, scoped to this repo). This is
+required — GitHub hard-blocks the default `GITHUB_TOKEN` from pushing any ref
+that touches `.github/workflows/`, and the first-release baseline tag points at
+the root commit. Without `RELEASE_TOKEN`, the release job fails.
+
 ## Code of conduct
 
 Be respectful and constructive. Harassment or abusive behavior is not

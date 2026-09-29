@@ -36,10 +36,22 @@ jobs:
     steps:
       # Check out the merged state of `main` (not the PR head) so release
       # analysis runs against the code that actually landed.
+      #
+      # IMPORTANT: check out with RELEASE_TOKEN, not the default GITHUB_TOKEN.
+      # The default token is a GitHub App credential that GitHub hard-blocks
+      # from pushing any ref whose range touches .github/workflows/ — no
+      # `permissions: contents: write` lifts that, because the token has no
+      # `workflows` scope. The seed step and semantic-release both push git
+      # tags; a tag pointing at the root commit (which creates the workflow
+      # files) makes the default GITHUB_TOKEN push fail with a remote-reject.
+      # RELEASE_TOKEN is a fine-grained PAT (Contents: read/write,
+      # Workflows: read/write, scoped to this repo) stored as a repo secret;
+      # wiring it here means every later git operation in this job uses it.
       - uses: actions/checkout@v7
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - uses: actions/setup-go@v7
         with:
@@ -83,4 +95,4 @@ jobs:
           extra_plugins: |
             conventional-changelog-conventionalcommits@8.0.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN }}
