@@ -85,6 +85,16 @@ rules make releases predictable:
    Performance Improvements); `chore:`/`ci:`/`docs:` are invisible. So a marker
    ships exactly the user-facing work it waited for, and nothing else.
 
+   The notes are **only as informative as the commit labels**: work committed
+   as `chore:` will not appear. When a release's window contains only hidden
+   types (`chore`/`ci`/`docs`/`refactor`), the generated body is empty — that
+   happened on the v0.1.0 release, so as a convention:
+
+   - Label real user-facing work `feat:`/`fix:`/`perf:`, never bury it under
+     `chore:`.
+   - After a marker merges, **open the release and check the body**; if it
+     turned out empty or thin, edit it by hand to describe the changes.
+
 The marker commit should be message-only (no code changes). Do not bump
 versions in a PR or on the CLI; the pipeline owns versioning.
 
