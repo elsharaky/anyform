@@ -445,6 +445,16 @@ Consequences:
 - Marker commits themselves produce no changelog line; they are the version
   decision, not content.
 
+The notes are **only as informative as the commit labels**: hidden types
+(`chore`/`ci`/`docs`/`refactor`) never appear. If a marker's window contains
+only hidden types, the release body is generated empty — this happened on
+`v0.1.0`. Conventions to keep notes meaningful:
+
+1. Label real user-facing work `feat:`/`fix:`/`perf:`, never bury it under
+   `chore:`.
+2. After a marker merges, open the new release and check the body; if it is
+   empty or thin, edit it by hand to describe the changes.
+
 ### 11.4 The first release (semantic-release quirk)
 
 `semantic-release` hardcodes the **very first** release to `1.0.0`. To honor
