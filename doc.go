@@ -62,11 +62,12 @@
 //
 // # File Uploads
 //
-// Fields of type [File] or [File] are populated from multipart form data:
+// Fields of type [File], *File, or []File are populated from multipart form
+// data:
 //
 //	type Upload struct {
-//	    Avatar goform.File   `form:"avatar"`
-//	    Docs   goform.Files  `form:"documents"`
+//	    Avatar goform.File    `form:"avatar"`
+//	    Docs   []goform.File  `form:"documents"`
 //	}
 //
 // File parts are routed through the struct exactly like value keys: a part
@@ -106,10 +107,14 @@
 //     when a promoted key decodes into it.
 //   - time.Time (RFC3339 by default, configurable via WithTimeLayout)
 //   - time.Duration and net.IP / url.URL (built-in converters)
+//   - []byte as a single opaque value: "data=hello" fills the whole slice,
+//     instead of being expanded into per-byte elements. Explicit "[i]" keys
+//     still address individual elements.
 //   - Types implementing encoding.TextMarshaler / TextUnmarshaler. A
 //     registered custom converter always takes precedence over these, at
 //     every container depth on both encode and decode.
-//   - File and []File across multipart round-trips
+//   - File, *File, and []File across multipart round-trips, at any nesting
+//     (nested structs, slice elements, and map entries)
 //
 // # Key format
 //
@@ -147,16 +152,20 @@
 //     colliding file part would otherwise be consumed by every matching File
 //     field. Strict mode is not required.
 //   - Every decode failure is a *DecodingError, so errors.As(err,
-//     &*DecodingError{}) always succeeds — even for plain scalar parse
-//     failures (int overflow, bad bool), which previously escaped as bare
-//     errors.
+//     &*DecodingError{}) always succeeds — including plain scalar parse
+//     failures (int overflow, bad bool), not only nested container lookups.
 //   - WithMaxBodySize limits the whole body passed to Unmarshal
 //     (ErrBodyTooLarge); WithMaxFileSize limits each file part
 //     (ErrFileTooLarge). Both are 0 (= unlimited) by default. A file part
 //     exceeding the file limit is rejected using its declared size before the
 //     content is read into memory.
+//   - WithMaxSliceIndex bounds the index a client-supplied "[i]" key may grow
+//     a slice to (default 100000, 0 = unlimited). It is independent of the
+//     body size: a tiny body such as "items[5000000]=x" would otherwise force
+//     a huge allocation. An index at or above the bound fails with a
+//     *DecodingError.
 //   - Unmarshalling matches a submitted key against any tag name in the
 //     priority list, not just the primary form name. This applies to value
-//     fields AND File/[]File fields: a file part named by any of the field's
-//     tags is accepted.
+//     fields AND File/*File/[]File fields: a file part named by any of the
+//     field's tags is accepted.
 package goform

@@ -31,7 +31,7 @@ NewDecoder() -> Decoder          ✔
    .UnmarshalMultipart(req, &v)
    .UnmarshalMultipartForm(mf, &v)
 File{Content, ContentType, Filename}  ✔  the file type
-[]File                               ✔  multi-file (replaces old Files alias)
+File / *File / []File fields            ✔  at any nesting
 Converter interface                  ✔  custom (un)marshal
 FileFromHeader, FilesFromRequest     ✔  file helpers (net/http aware)
 EncodingError / DecodingError        ✔  contextual errors
@@ -49,12 +49,14 @@ Err* sentinels                       ✔  errors.Is targets
 ```
 Marshal(v, opts...)
  ├─ newConfig(opts...)
- ├─ addressableValue(v)          • deref pointers, error if not struct
- ├─ scanForFiles(rv, visited, 0) • recursive File/[]File scan, cycle-guarded
- │    ├─ has File -> MarshalMultipart (multipart/form-data + boundary)
- │    └─ no File  -> Encoder.Marshal -> []byte(vals.Encode()) + urlencoded
-Unmarshal(body, ct, opts...)
- ├─ maxBodySize? body too big -> ErrBodyTooLarge   [NEW]
+ ├─ addressableValue(v)             • deref pointers, error if not struct
+ ├─ scanForFiles(rv, visited, 0,
+ │              cfg.maxDepth, r)    • recursive File scan, call-stack cycle guard
+ │                                  • skips unexported / form:"-" fields
+ ├─ has File -> MarshalMultipart (multipart/form-data + boundary)
+ └─ no File  -> Encoder.Marshal -> []byte(vals.Encode()) + urlencoded
+Unmarshal(body, ct, v, opts...)
+ ├─ maxBodySize? body too big -> ErrBodyTooLarge
  ├─ isMultipartContentType(ct)?
  │    └─ yes -> unmarshalMultipartBody: parse boundary -> multipart.Reader
  │               -> ReadForm(32<<20) -> UnmarshalMultipartForm
@@ -72,17 +74,19 @@ encodeStruct(rv, prefix, vals, depth)
  ├─ unexported -> skip
  ├─ marshalFieldName -> skip?
  ├─ omitempty / WithZeroEmpty -> isEmpty?
- └─ encodeField(rv, key, vals, depth)  [depth threaded everywhere]
-      ├─ File -> ErrFileNotSupported (url.Values path)
+ └─ encodeField(rv, key, vals, depth)   • depth threaded everywhere
+      ├─ File / []File -> ErrFileNotSupported (url.Values path)
       ├─ custom converter
-      ├─ time.Time (layout)  BEFORE TextMarshaler
+      ├─ time.Time (layout)   BEFORE TextMarshaler
+      ├─ []byte -> one scalar blob, not per-byte keys
       ├─ TextMarshaler (if enabled)
       ├─ struct -> encodeStruct(depth+1)
       ├─ slice/array -> encodeSlice  (key[i])
       ├─ map        -> encodeMap     (key[k])
       └─ scalar     -> formatScalar (vals.Add)
   (multipart twin: encodeStructMultipart / encodeFieldMultipart
-   writeFilePart for File, writeStringPart for the rest)
+   writeFilePart for File, writeStringPart for the rest;
+    a File with an empty filename is skipped -> bodies round-trip)
 
 Depth guard at every entry -> ErrMaxDepthExceeded (cycle-safe)
 ```
@@ -97,30 +101,44 @@ Decoder.UnmarshalMultipartForm(mf, &v)
 parseKeyPath(key) -> []keyToken{kind: field|index|mapkey}
 
 unmarshalValues(vals, elem, depth)
- └─ buildUnmarshalIndex(type) key:name -> field (flattens anon structs)
+ └─ buildUnmarshalIndex(type) -> unmarshalIndex{fields, ambiguous}
+          • cached per type; flattens anon structs; every tag alias
+          • ambiguous[key] -> DecodingError (both modes, no strict needed)
      └─ for each submitted key: decodePath(tokens)
 
 decodePath(field, rest[], values, depth)
  ├─ deref pointers (allocate if nil)
  ├─ leaf -> assignLeaf
- │         ├─ struct -> time.Time via converter
- │         ├─ slice/array -> append / positional
- │         └─ scalar -> assignScalarTo
- │                     ├─ TextUnmarshaler (if enabled)
+ │         ├─ struct   -> time.Time via converter
+ │         │                value part at a File field -> ignored
+ │         │                scalar at a struct field  -> DecodingError
+ │         ├─ slice     -> []byte single value / append / positional
+ │         ├─ map       -> requires bracket notation
+ │         └─ scalar   -> assignScalarTo
  │                     ├─ custom converter
- │                     └─ parseScalar (strconv)
+ │                     ├─ TextUnmarshaler (if enabled)
+ │                     └─ parseScalar (strconv, own bit size)
  ├─ field  -> descend into nested struct
- ├─ index  -> slice/array element
+ ├─ index  -> slice/array element (bounded by maxSliceIndex)
  └─ mapkey -> map entry
 
-unmarshalFiles(mf, elem)   • populate File / []File from multipart parts
- ├─ unmarshalTagNames(sf)  • alias keys (form/json/xml/... + Go name)
- ├─ strict -> unknown file parts = DecodingError (was silently dropped)
- └─ readFile(fh)   [NEW]: maxFileSize checked on fh.Size BEFORE read
+unmarshalFiles(mf, elem)   • populate File / *File / []File from parts
+ ├─ parts visited in sorted order -> deterministic routing
+ ├─ consumeFilePart -> consumeFilePartTokens
+ │     • SAME key paths as values: meta.avatar, docs[0].bin, m[k].bin
+ │     • tag aliases + promoted embedded fields resolve identically
+ │     • ambiguous base -> DecodingError (both modes)
+ │     • final token must be a File leaf, else unconsumed
+ ├─ strict -> unconsumed part = DecodingError
+ └─ readFile(fh)   • maxFileSize checked on fh.Size BEFORE read
      over-limit -> DecodingError{ErrFileTooLarge} (whole input rejected)
      (len(f.Content) check kept as fallback for hand-built FileHeaders)
 
-applyDefaultsAndRequired(elem, submittedKeys, depth)   [after decode]
+providedFields(elem, keys, depth)   • after decode
+ └─ markProvidedPath: mirrors decodePath routing, records canonical
+     field index paths (joinIndex); multipart adds file part names
+
+applyDefaultsAndRequired(elem, provided, indexPath, depth)   • after decode
  ├─ required & missing      -> ErrMissingRequired
  └─ default:v & missing     -> assignScalarTo (scalars only, isDefaultable)
 ```
@@ -130,10 +148,11 @@ applyDefaultsAndRequired(elem, submittedKeys, depth)   [after decode]
 ```
 tagResolver (unexported)
  ├─ priority []string        default: form > json > xml > protobuf
- ├─ marshaledFieldName(sf)   (name, skip)
+ ├─ marshalFieldName(sf)     (name, skip)
  ├─ marshalFieldOptions(sf)  tagOptions
- ├─ buildUnmarshalIndex(t)   map key -> structField (flattens anon)
- └─ unmarshalFieldName(t,key)
+ ├─ isSkipped(sf)            skip decision on its own
+ ├─ buildUnmarshalIndex(t)   cached unmarshalIndex (see above)
+ └─ firstExistingTag(sf)     first tag in priority order
 
 parseTagOptions("name,omitempty,required,default:v")
  ├─ protobuf "wire,num,name=xxx" special-case
@@ -148,8 +167,8 @@ Marshal uses first existing tag; Unmarshal accepts ANY tag name.
 
 ```
 parseScalar(s, field)   • strconv for bool/int*/uint*/float*/complex*
-                          overflow checks, descriptive errors
-assignScalarTo          • TextUnmarshaler -> converter -> parseScalar
+                          at the field's own bit size, overflow-checked
+assignScalarTo          • converter -> TextUnmarshaler -> parseScalar
 built-in converters     • registered in defaultConfig:
      durationConverter  time.Duration  (ParseDuration)
      ipConverter        net.IP
@@ -161,7 +180,8 @@ built-in converters     • registered in defaultConfig:
 
 ```
 config{ tagPriority, maxDepth(32), maxBodySize(0=∞), maxFileSize(0=∞),
-        zeroEmpty, timeLayout(RFC3339), converters, textAware(true), strict }
+        maxSliceIndex(100000), zeroEmpty, timeLayout(RFC3339),
+        converters, textAware(true), strict }
 newConfig(opts...) -> defaultConfig() + apply options
 ```
 
@@ -179,8 +199,9 @@ ErrBodyTooLarge  ErrFileTooLarge
 
 ```
 File{Content []byte, ContentType, Filename}
+  usable as File / *File / []File, at any nesting
 FileFromHeader(*multipart.FileHeader) -> File
-FilesFromRequest(*http.Request, field) -> []File
+FilesFromRequest(*http.Request, field) -> []File   (nil, nil when absent)
 (HTTP-aware ONLY here; core is HTTP-agnostic)
 ```
 
@@ -188,9 +209,10 @@ FilesFromRequest(*http.Request, field) -> []File
 
 ```
 doc.go        • package contract (types, key format, semantics)
-_examples/    • basic | nested | multipart | custom-types  (go run)
-examples_test.go • godoc-verified Example* outputs
-docs/         • DEVELOPER.md (user guide)  MAINTAINER.md (this)  MINDMAP.md
+_examples/    • basic | nested | multipart | custom-types | validation
+              • excluded from ./... by the leading underscore - run directly
+examples_test.go • 11 godoc-verified Example* outputs
+docs/         • DEVELOPER.md (user guide)  MAINTAINER.md (architecture)
 ```
 
 ## Data-flow summary (one glance)
@@ -209,7 +231,10 @@ docs/         • DEVELOPER.md (user guide)  MAINTAINER.md (this)  MINDMAP.md
  • Depth threading across ALL recursion points (cycle safety)
  • time.Time handled before TextMarshaler (layout respect)
  • default: only for scalars (isDefaultable)
- • scanForFiles visited-map cycle guard
+ • scanForFiles visited-map cycle guard (call-stack, not global)
+ • File limits checked on fh.Size BEFORE reading content
+ • WithMaxSliceIndex: "[i]" keys are a body-size-independent vector
+ • Every lookup path goes through the cached unmarshalIndex
  • Marshal priority vs Unmarshal any-tag asymmetry (intentional)
  • Errors always wrap with Unwrap() for errors.Is/As
 ```
