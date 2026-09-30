@@ -1,5 +1,6 @@
-// Command custom-types demonstrates registering a custom Converter, custom tag
-// priority, and built-in type support.
+// Command custom-types demonstrates registering a custom Converter and the
+// built-in conversions for time.Time and time.Duration. Custom tag priority
+// (WithTagPriority) is covered by the godoc examples in examples_test.go.
 package main
 
 import (

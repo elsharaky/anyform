@@ -194,13 +194,14 @@ always round-trips.
 | Pointers | `*T` | nil → omitted; empty → nil |
 | Slices/Arrays | `[]T`, `[N]T` | indexes: `field[0]` |
 | Maps | `map[K]V` | keys: `field[key]` |
+| `[]byte` | single value | one opaque blob (`data=hello`), not one key per byte; `[i]` keys still work |
 | Nested structs | dot notation | e.g. `address.city` |
 | Embedded structs | flattened | promoted fields (value and pointer embeds, `*Inner` included) |
 | `time.Time` | RFC3339 default | configurable layout |
 | `time.Duration` | `"1h30m"` | |
 | `net.IP`, `url.URL` | string form | |
 | `TextMarshaler` / `TextUnmarshaler` | automatic | a registered `WithCustomConverter` always wins, at every container depth, on encode and decode |
-| `File` / `[]File` | multipart | |
+| `File` / `*File` / `[]File` | multipart | routed like value keys, at any nesting |
 | Custom types | `WithCustomConverter` | |
 | `any` / `interface{}` | encode only | see note below |
 
@@ -371,18 +372,20 @@ type Config struct {
 `omitempty` (and the global `WithZeroEmpty`) control marshalling output.
 `required` and `default` are enforced during unmarshalling: a required field
 that is missing produces `ErrMissingRequired`, and an absent field with a
-default is populated before the key is returned. Both are resolved against the
-field's primary `form` name.
+default is populated before the value is returned. A field counts as provided
+when **any** of its tag names resolves to it — so `,default:` is never written
+over a value the client actually sent, including via an alias or a nested key.
 
 ## Examples
 
 Standalone runnable examples live in [`_examples/`](_examples):
 
 ```bash
-go run ./_examples/basic
-go run ./_examples/multipart
-go run ./_examples/nested
-go run ./_examples/custom-types
+go run ./_examples/basic           # unified Marshal/Unmarshal
+go run ./_examples/nested          # nested structs, slices, maps
+go run ./_examples/multipart       # file uploads with goform.File
+go run ./_examples/custom-types    # custom Converter, time.Time/Duration
+go run ./_examples/validation      # required/default, strict mode, limits
 ```
 
 ## Benchmarks

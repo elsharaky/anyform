@@ -41,8 +41,12 @@ types.go              Built-in converters (time, duration, ip, url), scalar pars
 options.go            config struct + functional options (With*)
 errors.go             EncodingError, DecodingError, sentinel errors
 file.go               File type + FileFromHeader / FilesFromRequest
-doc.go                Package documentation (godesk reference)
-_examples/            Runnable CLI examples (basic, nested, multipart, custom-types)
+doc.go                Package documentation (godoc reference)
+README.md             Project overview, feature matrix, quick start
+CONTRIBUTING.md       Contribution + release-marker conventions
+docs/                 DEVELOPER.md (user guide), MAINTAINER.md (this), MINDMAP.md
+_examples/            Runnable CLI examples (basic, nested, multipart,
+                      custom-types, validation)
 *_test.go             Unit, example, benchmark, and robustness tests
 .github/              CI + release + code scanning workflows
 ```
@@ -55,22 +59,25 @@ _examples/            Runnable CLI examples (basic, nested, multipart, custom-ty
 
 ```go
 type config struct {
-    tagPriority []string
-    maxDepth    int
-    maxBodySize int64
-    maxFileSize int64
-    zeroEmpty   bool
-    timeLayout  string
-    converters  map[reflect.Type]Converter
-    textAware   bool
-    strict      bool
+    tagPriority   []string
+    maxDepth      int
+    maxBodySize   int64
+    maxFileSize   int64
+    maxSliceIndex int
+    zeroEmpty     bool
+    timeLayout    string
+    converters    map[reflect.Type]Converter
+    textAware     bool
+    strict        bool
 }
 ```
 
 Functional options mutate this struct. `defaultConfig()` seeds the built-in
-converters (`time.Duration`, `net.IP`, `url.URL`) and default priority.
+converters (`time.Duration`, `net.IP`, `url.URL`), the default tag priority, and
+the limits: `maxDepth` 32, `maxSliceIndex` 100000.
 `maxBodySize` / `maxFileSize` are `0` by default (unlimited); `> 0` enables a
-limit, `<= 0` disables it.
+limit, `<= 0` disables it. `maxSliceIndex` behaves the same way, with `0`
+meaning unlimited.
 
 ### `Encoder` / `Decoder`
 
@@ -93,11 +100,26 @@ safe for concurrent use after construction.
 
 Resolves field names from tags. Key methods:
 
-- `marshalFieldName(sf) (name string, skip bool)` — the primary key.
+- `marshalFieldName(sf) (name string, skip bool)` — the primary key (highest
+  priority tag present; skip when that tag is `-`).
 - `marshalFieldOptions(sf) tagOptions` — omitempty/required/default flags.
-- `buildUnmarshalIndex(t) map[string]reflect.StructField` — maps every tag name
-  to its field, **flattening anonymous embedded structs** into the parent scope.
-- `unmarshalFieldName(t, key) (field, ok)` — reverse lookup.
+- `isSkipped(sf) bool` — the skip decision on its own.
+- `buildUnmarshalIndex(t) unmarshalIndex` — **cached** per type; maps every tag
+  name (plus the Go field name) to its field, flattening anonymous embedded
+  structs into the parent scope. See `unmarshalIndex` below.
+
+```go
+type unmarshalIndex struct {
+    fields    map[string]reflect.StructField // every tag alias -> field
+    ambiguous map[string]bool                 // key claimed by >1 field
+}
+```
+
+Ambiguity is recorded at build time so both the value decoder and the file
+decoder reject a colliding key instead of letting the last writer win. There is
+no `unmarshalFieldName(t, key)` helper: lookups always go through the per-type
+index, which is what makes flattening, aliases, and ambiguity detection work
+the same at every nesting level.
 
 `tagOptions`:
 
@@ -118,29 +140,37 @@ func Marshal(v any, opts ...Option) (body []byte, contentType string, err error)
     enc := &Encoder{cfg: cfg, resolver: newTagResolver(cfg.tagPriority...)}
     rv, err := addressableValue(v)
     ...
-    if scanForFiles(rv, make(map[reflect.Type]bool), 0) { // has File fields?
+    if scanForFiles(rv, make(map[reflect.Type]bool), 0, cfg.maxDepth, enc.resolver) {
         return enc.MarshalMultipart(v)
     }
     vals, _ := enc.Marshal(v)
-    return []byte(vals.Encode()), "application/x-www-form-urlencoded", nil
+    return []byte(vals.Encode()), urlEncodedContentType, nil
 }
 ```
 
 ### `scanForFiles`
 
-Walks the struct recursively looking for `File` / `[]File` fields. It:
+Walks the value recursively looking for `File` / `[]File` fields. It:
 
 - Dereferences pointers and interfaces.
-- Iterates slice/map/array elements.
+- Iterates slice/array elements and map values.
+- Skips fields the encoder would skip — unexported, `form:"-"`, explicit omit —
+  so the format decision tracks what multipart would actually emit.
 - Guards against **self-referential types** with a `visited map[reflect.Type]bool`
   (a `*Node` pointing back to `Node` would otherwise recurse forever).
-- Respects `defaultMaxDepth` as a hard stop.
+- Respects the configured `maxDepth` as a hard stop.
+- Uses a **call-stack** visited set, deleting the type on the way out: the same
+  struct type appearing twice in sibling branches is scanned both times (the
+  dynamic content can differ), while a true cycle is still cut.
 
 If any `File` is found, `Marshal` routes to multipart; otherwise url-encoded.
 
 ```go
 func Unmarshal(body []byte, contentType string, v any, opts ...Option) error {
     cfg := newConfig(opts...)
+    if cfg.maxBodySize > 0 && int64(len(body)) > cfg.maxBodySize {
+        return &DecodingError{Err: ErrBodyTooLarge}
+    }
     dec := &Decoder{cfg: cfg, resolver: newTagResolver(cfg.tagPriority...)}
     if isMultipartContentType(contentType) {
         return dec.unmarshalMultipartBody(body, contentType, v)
@@ -226,7 +256,8 @@ inner text as an integer index or a map key.
 ### Unmarshal path
 
 ```
-Unmarshal(values, v) -> unmarshalValues(values, elem, 0) -> applyDefaultsAndRequired
+Unmarshal(values, v) -> unmarshalValues(values, elem, 0)
+                  -> applyDefaultsAndRequired(elem, providedFields(elem, formKeys(values), 0))
 ```
 
 - `unmarshalValues` builds the unmarshal index for the struct level, iterates
@@ -234,8 +265,11 @@ Unmarshal(values, v) -> unmarshalValues(values, elem, 0) -> applyDefaultsAndRequ
 - `decodePath` walks the tokens, allocating pointers, descending into structs,
   setting slice indexes, and reading map keys. Leaf assignment goes through
   `assignLeaf` → `assignScalarTo` (converters, `TextUnmarshaler`, `parseScalar`).
-- `assignLeaf` handles structs (time.Time via converter), slices (append /
-  positional), maps (must use bracket notation), and scalars.
+- `assignLeaf` handles structs (`time.Time` via converter, a scalar aimed at a
+  struct is an error), slices (`[]byte` single value, append / positional), maps
+  (must use bracket notation), and scalars.
+- A client `[i]` key grows a slice only up to `cfg.maxSliceIndex`; beyond it the
+  key fails with a `DecodingError`.
 
 ### multipart path
 
@@ -243,22 +277,41 @@ Unmarshal(values, v) -> unmarshalValues(values, elem, 0) -> applyDefaultsAndRequ
 UnmarshalMultipartForm(mf, v)
   -> unmarshalValues(url.Values(mf.Value), elem, 0)  // scalar/value fields
   -> unmarshalFiles(mf, elem)                        // File fields
-  -> applyDefaultsAndRequired
+  -> applyDefaultsAndRequired(elem, providedFields(elem, valueKeys + filePartNames, 0))
 ```
 
-`unmarshalFiles` walks the struct and matches file part names using
-`unmarshalTagNames` — the *same* alias logic value fields use (`form`, `json`,
-`xml`, `protobuf`, plus the Go field name). A file part named by any of a
-field's tags is accepted. Under `WithStrictUnmarshal`, file parts that match
-no `File` field are rejected (previously they were silently dropped — a bug
-fixed alongside the value/file alias parity issue). Fields are populated from
-`readFile`, a thin wrapper around `FileFromHeader` that enforces
-`config.maxFileSize`:
-if `fh.Size > maxFileSize`, it returns `DecodingError{ErrFileTooLarge}`
-**before** the content is read into memory, and the whole input is rejected
-(there is no partial-file behavior). `FileFromHeader` reads the content with
-`io.ReadAll`, and the check against `len(f.Content)` serves as a safety net for
-hand-built `FileHeader`s whose `Size` field is zero.
+`unmarshalFiles` routes each part name through the **same key path** the value
+decoder uses, via `consumeFilePart` → `consumeFilePartTokens`. A part is
+tokenized with `parseKeyPath` and walked token by token, so:
+
+- `meta.avatar` descends into a nested struct, mirroring what the encoder
+  emitted.
+- `docs[0].bin` grows/addresses a slice element.
+- `m[k]` / `m[k].bin` creates map entries.
+- Embedded promoted fields and **every tag alias** (`form`, `json`, `xml`,
+  `protobuf`, plus the Go field name) resolve identically to value keys.
+
+The final token must land on a `File`, `*File`, or `[]File` leaf. Anything else
+leaves the part unconsumed — dropped by default, rejected under
+`WithStrictUnmarshal`. An ambiguous base (two sibling `File` fields sharing a
+tag, or an embedded promoted `File` colliding with an outer one) is an error in
+**both** modes: a colliding part would otherwise be consumed by every matching
+field.
+
+Parts are visited in sorted order so that when two different part names resolve
+to the same field, the winner is deterministic across runs.
+
+Fields are populated from `readFile`, a thin wrapper around `FileFromHeader`
+that enforces `config.maxFileSize`: if `fh.Size > maxFileSize`, it returns
+`DecodingError{ErrFileTooLarge}` **before** the content is read into memory, and
+the whole input is rejected (there is no partial-file behavior). `FileFromHeader`
+reads the content with `io.ReadAll`, and the check against `len(f.Content)`
+serves as a safety net for hand-built `FileHeader`s whose `Size` field is zero.
+
+A **value** part addressed at a `File` field is ignored rather than fatal: that
+is the signature of an untouched browser file input, whose part carries an empty
+filename and lands in the value store. Failing the decode there would break an
+ordinary form with an optional file box left empty.
 
 Size limits are checked **pre-read**: an oversized part is rejected on its
 declared size before any buffering. This removes the unbounded-RAM problem
@@ -267,17 +320,28 @@ checks `WithMaxBodySize` against `len(body)` up front.
 
 ### defaults & required (`applyDefaultsAndRequired`)
 
-Runs *after* a successful decode:
+Runs *after* a successful decode, and takes a **provided set** rather than
+re-deriving "was this submitted?" from the key strings:
 
-- Builds the set of submitted base keys (`valuesKeys` / `multipartKeys`).
-- Walks the struct, recursing into nested and anonymous structs.
-- A field is "provided" if a key equals its name or prefixes it with `.` / `[`.
-- If **not** provided:
+- `providedFields(dst, keys, depth)` parses each submitted key and routes it
+  through `markProvidedPath`, which mirrors `decodePath`'s routing and records
+  the canonical `StructField.Index` chain (`joinIndex`) of every field the key
+  resolves to. For multipart, the key list is the value keys **plus** the file
+  part names, so a field satisfied only by a file part counts as provided.
+- Because routing is shared, a nested key (`ship_to.city`), an indexed key, a
+  promoted embedded field, or an alternate tag name all mark the destination
+  field provided. A key the decoder rejects (ambiguous, unknown, out of range,
+  too deep) marks nothing — matching the fact that it decodes to nothing.
+- Walks the struct, recursing into nested, anonymous, and pointer-embedded
+  structs.
+- For a field that is **not** provided:
   - `required` → `ErrMissingRequired` (wrapped in `DecodingError{Key: name}`).
   - `default:v` → sets the value via `assignScalarTo`, but **only for scalar
-    kinds** (`isDefaultable` excludes pointers, slices, maps, files).
-- This makes `default`/`required` work for both url.Values and multipart, and
-  for nested levels.
+    kinds** (`isDefaultable` excludes pointers, slices, maps, and `File`).
+
+This is what makes `default`/`required` work for both `url.Values` and
+multipart, at every nesting level, without a default ever overwriting a value
+the client actually sent.
 
 ---
 
@@ -290,10 +354,15 @@ Runs *after* a successful decode:
   - `timeConverter` — `time.Time`, but with configurable layout. `time.Time`
     is handled *before* the generic `TextMarshaler` branch so a custom
     `WithTimeLayout` is respected.
-- **`parseScalar`** converts strings to all scalar kinds via `strconv`, with
-  overflow checks and informative errors.
-- **`assignScalarTo`** prefers `TextUnmarshaler`, then custom converter, then
-  `parseScalar`.
+- **`parseScalar`** converts strings to all scalar kinds via `strconv`, at the
+  destination's own bit size, with overflow checks and informative errors. A
+  `float32` field receiving `1e40` errors instead of becoming `+Inf`.
+- **`assignScalarTo`** prefers a registered converter, then `TextUnmarshaler`,
+  then `parseScalar`.
+- **`[]byte` is one scalar**, in both directions: the encoder emits its raw
+  text (`data=hello`) instead of expanding it into per-byte keys, and
+  `assignLeaf` fills it from a single submitted value. Explicit `[i]` keys still
+  address individual elements.
 
 ---
 
@@ -308,9 +377,17 @@ type File struct {
 ```
 
 - Decoupled from HTTP on purpose — usable in handlers, tests, gRPC, CLIs.
+- `File`, `*File`, and `[]File` are all valid field types and round-trip at any
+  nesting.
 - `FileFromHeader(fh)` opens a multipart header, reads all bytes, and sniffs a
   Content-Type if the header lacks one.
-- `FilesFromRequest(r, field)` pulls `[]File` for a named field.
+- `FilesFromRequest(r, field)` pulls `[]File` for a named field, returning
+  `nil, nil` (not an error) when the field has no files.
+- Encoder/decoder symmetry at the zero boundary: a `File` with an empty
+  filename (e.g. the zero value) is **skipped** on emit, a part with an empty
+  filename is a *value* part to the parser, and a value part addressed at a
+  `File` field is ignored. A part that *is* present with zero bytes still
+  binds, keeping its filename — so a body goform produces always round-trips.
 - Historically there was a `type Files = []File` alias; it was **removed** for
   a cleaner API — users write `[]File` directly.
 
@@ -325,12 +402,18 @@ Marshal / Unmarshal                 top-level unified API
 NewEncoder / Encoder.Marshal / .MarshalMultipart
 NewDecoder / Decoder.Unmarshal / .UnmarshalMultipart / .UnmarshalMultipartForm
 File, Converter, Option
-With* options (9)
+With* options (10): WithTagPriority, WithMaxDepth, WithMaxSliceIndex,
+                    WithTimeLayout, WithZeroEmpty, WithCustomConverter,
+                    WithTextMarshalerSupport, WithStrictUnmarshal,
+                    WithMaxBodySize, WithMaxFileSize
 EncodingError, DecodingError, ErrNotStruct, ErrNilPointer,
 ErrMissingRequired, ErrFileNotSupported, ErrMaxDepthExceeded,
 ErrBodyTooLarge, ErrFileTooLarge
 FileFromHeader, FilesFromRequest
 ```
+
+`With*` accepts an explicit `Option` for both the top-level functions and the
+`New*` constructors, and a nil option is skipped.
 
 Everything reflection-internal (the tag resolver) is **unexported** — users
 never touch `reflect.StructField` plumbing.
@@ -345,30 +428,59 @@ never touch `reflect.StructField` plumbing.
 
 ## 10. Testing strategy
 
-- **Unit tests** (`encoder_decoder_test.go`, `tag_test.go`) — table-driven,
-  cover tag priority, nested types, slices, maps, errors.
-- **Feature-specific tests** (`defaults_test.go`, `multipart_gap_test.go`) —
-  `default`/`required`, multipart-with-no-files, missing boundary.
-- **Robustness tests** (`robustness_test.go`) — `WithZeroEmpty` semantics,
-  circular-reference safety, and **concurrency** (many goroutines sharing one
+- **`marshal_test.go` / `decoder_test.go`** — the bulk of the suite
+  (~66 tests): tag priority, nesting, slices, arrays, maps, pointers, embedded
+  and pointer-embedded structs, ambiguity, strict mode, scalar parsing, and
+  `WithMaxSliceIndex` (cap, custom cap, disabled). `decoder_test.go` also
+  carries the `,default` / `,required` matrix (nested, aliased, and promoted
+  variants).
+- **`tag_test.go`** — resolver behavior: priority order, field names, tag
+  option parsing, key-path tokenizing, and the per-type index cache.
+- **`files_test.go`** — `File` behavior: multipart round-trips at every nesting
+  (nested, slice, map, embedded, pointer), file/[]File/*File tag aliases,
+  ambiguous parts, strict-mode parts, zero-byte bodies, and the
+  empty-filename/value-part parity rules.
+- **`limits_test.go`** — `WithMaxBodySize`, `WithMaxFileSize` (including
+  reject-before-read and whole-input rejection), the global `WithZeroEmpty`, and
+  the multipart edge cases (no file fields, boundary in the Content-Type, missing
+  boundary).
+- **`converter_test.go`** — built-in converters plus `WithCustomConverter`
+  precedence at every container depth.
+- **`roundtrip_test.go`** — marshal → unmarshal symmetry: multipart, `[]byte`
+  single-value, numeric-key maps, and `TextMarshaler` in string and struct kinds.
+- **`goform_test.go`** — the top-level API and multipart auto-detection.
+- **`robustness_test.go`** — circular-reference safety (depth error, and
+  `scanForFiles` neither hanging nor wrongly caching a type across sibling
+  interface fields) and **concurrency** (many goroutines sharing one
   Encoder/Decoder, plus top-level concurrent calls).
-- **Example tests** (`examples_test.go`) — runnable, godoc-verified `// Output`.
-- **Benchmarks** (`bench_test.go`) — `BenchmarkMarshal_*` / `BenchmarkUnmarshal_*`.
+- **Example tests** (`examples_test.go`) — 11 runnable, output-verified
+  `Example*` functions; these are the godoc examples, so their `// Output`
+  blocks are part of the test suite.
+- **Benchmarks** (`bench_test.go`) — 6 `BenchmarkMarshal_*` / `BenchmarkUnmarshal_*`.
+- **Runnable programs** (`_examples/`) — five `main` packages users can `go run`;
+  they are not covered by `go test ./...` (underscore dirs are ignored by the
+  go tool), so run them by hand when touching the public API.
 
 ### The safety toolbox
 
 ```bash
 go test -race ./...
 go vet ./...
-golangci-lint run        # configured for golangci-lint v2
+gofmt -l .            # must print nothing
+golangci-lint run     # configured for golangci-lint v2
 gosec ./...
 govulncheck ./...
+
+# _examples/ is excluded from ./... by the leading underscore — run it directly.
+for d in _examples/*/; do go run "./$d"; done
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of these on every PR. Security
-scanning (CodeQL) and dependabot are configured. Release automation lives in
-`.github/workflows/main.yml` — see [Release process](#11-release-process) below;
-no goreleaser since this is a pure library.
+CI (`.github/workflows/ci.yml`) runs gofmt, build, vet, race tests,
+golangci-lint, govulncheck, and gosec on every PR and push to `main`; gosec
+reports are uploaded to the Security tab via SARIF. CodeQL and dependabot are
+configured. Release automation lives in `.github/workflows/main.yml` — see
+[Release process](#11-release-process) below; no goreleaser since this is a pure
+library.
 
 ---
 
@@ -511,7 +623,11 @@ longer contain that workflow, so it will never run again.
   `parseTagOptions`, and consume it in the encoder/decoder.
 - **New option** → add a field to `config` and a `With*` func in `options.go`.
 - **Format detection changes** → `scanForFiles` / `isMultipartContentType`.
-- Always update `doc.go` (the contract), add tests, and run the toolbox.
+- **New File nesting** → file routing goes through the same key-path tokens as
+  values, so extending it is usually a change in `consumeFilePartTokens`, not a
+  new naming convention.
+- Always update `doc.go` (the contract), the README, `docs/`, and
+  `docs/MINDMAP.md`, add tests, and run the toolbox.
 
 ---
 
@@ -521,8 +637,17 @@ longer contain that workflow, so it will never run again.
   break the stack and `WithMaxDepth` silently stops working.
 - `time.Time` must be handled *before* the generic `TextMarshaler` branch or
   custom layouts are ignored.
-- `default` uses `isDefaultable` — applying it to a pointer/slice/map returns
-  an error; keep defaults to scalars.
+- `default` uses `isDefaultable` — keep defaults to scalars; pointers, slices,
+  maps, and `File` are excluded.
 - `scanForFiles` needs its `visited` map, or self-referential types hang.
+- File-size limits must be checked on the **declared** `fh.Size` *before*
+  reading, or an oversized part is buffered first.
+- A client-supplied `[i]` key is a body-size-independent allocation vector:
+  `WithMaxSliceIndex` is the only bound on it.
+- Marshal and Unmarshal share one index per type. When you add a lookup path,
+  route it through the cached index or ambiguity detection and tag aliases stop
+  applying at that level.
 - Unmarshal accepts any tag name; Marshal uses priority order. They are
   intentionally asymmetric — do not "fix" that to be symmetric.
+- Anything in `_examples/` is invisible to `go build ./...` and `go test ./...`.
+  A broken example will not fail CI.
