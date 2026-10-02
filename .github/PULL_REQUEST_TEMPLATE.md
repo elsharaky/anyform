@@ -17,6 +17,14 @@ Fixes #<issue-number>
 ## Changes
 <!-- Bullet list of the key changes. -->
 
+## Changelog
+<!-- Add an entry under `## [Unreleased]` in CHANGELOG.md. Use Added / Changed /
+     Deprecated / Removed / Fixed / Security. Write what it means for a reader,
+     not what the diff does. Skip only if the change has no user-visible effect
+     (typo fixes in comments, CI tweaks). -->
+
+- [ ] Updated `CHANGELOG.md`, or not applicable
+
 ## Test plan
 - [ ] `go test -race ./...` passes
 - [ ] `go vet ./...` passes

@@ -543,10 +543,12 @@ seeded baseline for the first release, see [11.4](#114-the-first-release-semanti
 
 - **Version:** `commit-analyzer` maps each commit through `releaseRules` and
   takes the highest bump found (the marker scope).
-- **Changelog:** `release-notes-generator` lists every commit in the window,
+- **Release body:** `release-notes-generator` lists every commit in the window,
   grouped by type (`feat` → Features, `fix` → Bug Fixes, `perf` → Performance
   Improvements); `chore`/`ci`/`docs`/`refactor` are hidden by the
-  `conventionalcommits` preset, so housekeeping stays out of the notes.
+  `conventionalcommats` preset, so housekeeping stays out of the notes. This
+  output is the *generated* body only — the project changelog is
+  [`CHANGELOG.md`](../CHANGELOG.md), written by hand.
 
 Consequences:
 
@@ -557,15 +559,26 @@ Consequences:
 - Marker commits themselves produce no changelog line; they are the version
   decision, not content.
 
-The notes are **only as informative as the commit labels**: hidden types
-(`chore`/`ci`/`docs`/`refactor`) never appear. If a marker's window contains
-only hidden types, the release body is generated empty — this happened on
-`v0.1.0`. Conventions to keep notes meaningful:
+The generated body is **not the record** — [`CHANGELOG.md`](../CHANGELOG.md) is.
+The generator has two hard limits:
+
+- **Hidden types never appear.** The `conventionalcommits` preset marks
+  `docs`/`style`/`chore`/`refactor`/`test`/`build`/`ci` as `hidden: true`, so if
+  a marker's window contains only those, the body is generated empty. That
+  happened on `v0.1.0` (18 commit lines, over half CI plumbing) and again on
+  `v0.1.1`.
+- **Commit subjects are all it has.** It never opens the diff, so it cannot say
+  what a change *means* for a reader — the thing Keep a Changelog asks for.
+
+Hence the split: entries are written by hand in the PR that makes the change,
+under `## [Unreleased]`, where the context is still fresh. See
+[CONTRIBUTING.md](../CONTRIBUTING.md#changelog). Two conventions:
 
 1. Label real user-facing work `feat:`/`fix:`/`perf:`, never bury it under
-   `chore:`.
-2. After a marker merges, open the new release and check the body; if it is
-   empty or thin, edit it by hand to describe the changes.
+   `chore:` — this is what the generated body reflects.
+2. After a marker merges, open the new release and compare its body against the
+   matching `CHANGELOG.md` section; paste the section in if the generated body
+   is thinner.
 
 ### 11.4 The first release (semantic-release quirk)
 
@@ -595,14 +608,21 @@ longer contain that workflow, so it will never run again.
    workflow's `git push` runs as this token; the default `GITHUB_TOKEN`
    cannot push refs that touch `.github/workflows/` (see [11.1](#111-the-trigger)).
 1. Ensure the work to ship is merged into `main` (`feat:`/`fix:`/`perf:`
-   commits — they require no marker to land).
-2. Create a branch off `main`, add a **message-only** empty commit
+   commits — they require no marker to land), and that each shipped change has
+   an entry under `## [Unreleased]` in `CHANGELOG.md`. The generated body is
+   *not* the record, so an unentered change ships with no changelog line at all.
+2. **Move `[Unreleased]` under a new version heading** — `## [0.2.0] - YYYY-MM-DD`,
+   newest first — and add the compare link at the foot of the file. This is a
+   docs-only commit; it needs no marker.
+3. Create a branch off `main`, add a **message-only** empty commit
    (e.g. `git commit --allow-empty -m "release(minor): ship ..."`), open a PR,
    merge it.
-3. The workflow tags `main` `v<computed>` and publishes a GitHub Release whose
+4. The workflow tags `main` `v<computed>` and publishes a GitHub Release whose
    notes include all accumulated user-facing work.
-4. Verify the tag and release on GitHub; patch-level follow-ups repeat the
-   process with a `release(patch)` marker.
+5. Verify the tag and release on GitHub, then **reconcile the release body**
+   with the version section you just wrote: paste it in if the generated body
+   is thinner (see [11.3](#113-the-commit-window)).
+6. Patch-level follow-ups repeat the process with a `release(patch)` marker.
 
 ### 11.6 Anti-patterns
 
@@ -612,6 +632,13 @@ longer contain that workflow, so it will never run again.
   the higher scope; use one marker per release window.
 - **Bumping versions by hand.** Versioning is owned by the pipeline; a manual
   version bump or tag will collide with `semantic-release`.
+- **Treating the generated release body as the changelog.** It is derived from
+  commit labels, so it is empty for all-hidden windows and it can only repeat
+  commit subjects. `CHANGELOG.md` is the record; the body is a pointer to it.
+- **Trying to automate this away.** `presetConfig.types` can un-hide `docs`, and
+  `@semantic-release/changelog` can write the file — but both inherit the same
+  commit-subject ceiling, and the first would make every `docs:` commit trigger
+  a release, breaking the marker model. See [11.3](#113-the-commit-window).
 
 ---
 
