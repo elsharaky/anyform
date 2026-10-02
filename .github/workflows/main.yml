@@ -15,6 +15,10 @@ name: Version
 # bumping from the last tag and including every accumulated work commit since
 # it in the changelog.
 #
+# "Changelog" here means the release body semantic-release generates, which is
+# NOT the project's changelog record. That is CHANGELOG.md, written by hand —
+# see CONTRIBUTING.md ("Changelog") and the note on the Semantic Release step.
+#
 # Tag pushes (refs/tags/*) do not match `branches: [main]`, so semantic-release
 # pushing the next tag never re-triggers this workflow.
 on:
@@ -95,6 +99,20 @@ jobs:
       # with the conventionalcommits preset. semantic-release v24 has the angular
       # preset built in, but conventionalcommits is an external package that must
       # be pre-installed (pinned to the v8 line compatible with semantic-release >= 24).
+      #
+      # THE GENERATED BODY IS NOT THE RECORD. `CHANGELOG.md` is, and it is
+      # maintained by hand under `## [Unreleased]` in the same PR as the change
+      # (Keep a Changelog). This step cannot write that file usefully: the preset
+      # hardcodes `docs`/`chore`/`ci`/`refactor` as hidden, so a window holding
+      # only those types produces an empty body — which is what happened on
+      # v0.1.0, and again on v0.1.1. It also has only commit subjects to work
+      # from, so it cannot state what a change means for a reader.
+      #
+      # Consequence for whoever ships a release: after this step publishes, open
+      # the new release, compare its body against the matching section of
+      # CHANGELOG.md, and paste that section in if the generated body is thinner.
+      # Do NOT add `presetConfig` or a changelog plugin to automate this — see
+      # CONTRIBUTING.md ("Changelog") and docs/MAINTAINER.md section 11.3.
       - name: Semantic Release
         uses: cycjimmy/semantic-release-action@v6
         with:
