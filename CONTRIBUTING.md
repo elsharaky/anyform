@@ -58,6 +58,20 @@ Use [Conventional Commits](https://www.conventionalcommits.org/):
 
 Example: `feat: add support for custom tag priority`
 
+## Changelog
+
+[`CHANGELOG.md`](CHANGELOG.md) follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+It is the record of what changed for readers; the GitHub Release body is a
+pointer to it.
+
+- Add an entry under `## [Unreleased]` in the same PR as the change, under
+  `Added` / `Changed` / `Deprecated` / `Removed` / `Fixed` / `Security`.
+- Write what it means for a reader, not what the diff does. Commit subjects are
+  a poor substitute — which is why the generated release notes are sometimes
+  empty (see rule 3 below).
+- Leave it out only for changes with no user-visible effect: typo fixes in
+  comments, CI tweaks, test-only edits.
+
 ## Versioning & releases
 
 `goform` follows [Semantic Versioning](https://semver.org/) and releases through
@@ -88,12 +102,15 @@ rules make releases predictable:
    The notes are **only as informative as the commit labels**: work committed
    as `chore:` will not appear. When a release's window contains only hidden
    types (`chore`/`ci`/`docs`/`refactor`), the generated body is empty — that
-   happened on the v0.1.0 release, so as a convention:
+   happened on the v0.1.0 release. That is why [`CHANGELOG.md`](CHANGELOG.md)
+   exists and is maintained by hand; the generated body is a convenience, not
+   the record. Two conventions follow:
 
    - Label real user-facing work `feat:`/`fix:`/`perf:`, never bury it under
      `chore:`.
-   - After a marker merges, **open the release and check the body**; if it
-     turned out empty or thin, edit it by hand to describe the changes.
+   - After a marker merges, **open the release and check the body**. If it is
+     thin, paste the corresponding `CHANGELOG.md` section in so the release page
+     is not worse than the file.
 
 The marker commit should be message-only (no code changes). Do not bump
 versions in a PR or on the CLI; the pipeline owns versioning.
